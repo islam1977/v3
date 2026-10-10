@@ -1,17 +1,18 @@
-name: Binance Early-Pump Scanner V2
+name: Binance Early-Pump Scanner V4
 
 on:
-  # الجدولة الداخلية بتاعة GitHub (schedule/cron) اتشالت من هنا عمدًا:
-  # كانت بتتأخر 15-60+ دقيقة وقت الزحام، وده كان بيخلي السكانر يفوّت
-  # قفزات سريعة. دلوقتي خدمة خارجية (cron-job.org) هي اللي بتستدعي
-  # الـ workflow كل دقيقتين بدقة عن طريق GitHub API، فمحتاجين بس
-  # workflow_dispatch يفضل مفعّل عشان يستقبل الاستدعاء ده (وكمان
-  # يسمح بالتشغيل اليدوي من تبويب Actions لو احتجته).
+  # cron-job.org بيستدعي الـ workflow ده كل دقيقتين عن طريق GitHub API
+  # (الـ schedule الداخلي اتشال لأنه بيتأخر 15-60+ دقيقة وقت الزحام)
   workflow_dispatch: {}
 
-permissions:
-  contents: write   # عشان الـ job يحفظ ملفات الحالة والنتائج في الريبو
+# مهم: يمنع تشغيلتين بالتوازي — ده كان بيعمل تعارض git push ويرجع
+# الـ state لورا ويكرر صفوف التتبع مئات المرات
+concurrency:
+  group: scanner-v4
+  cancel-in-progress: false
 
+permissions:
+  contents: write
 
 jobs:
   scan:
@@ -21,6 +22,8 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -35,13 +38,17 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python binance_early_pump_v2.py --once
+        run: python binance_early_pump_v4.py --once
 
       - name: Save state and results back to the repo
         if: always()
         run: |
           git config user.name "scanner-bot"
           git config user.email "scanner-bot@users.noreply.github.com"
-          git add scanner_state.json early_pump_signal_results.csv early_watch_log.csv 2>/dev/null || true
+          # سحب آخر حالة قبل الدفع عشان مانضيعش commits من تشغيلات تانية
+          git pull --rebase origin ${{ github.ref_name }} || true
+          git add scanner_state.json early_pump_signal_results.csv \
+                  early_watch_log.csv early_scan_diagnostics.csv \
+                  shariah_compliant_bases.json 2>/dev/null || true
           git diff --cached --quiet || git commit -m "Update scanner state [skip ci]"
           git push || true
