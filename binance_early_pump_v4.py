@@ -194,7 +194,8 @@ SHARIAH_SOURCE_API = "https://gethalalcrypto.com/api/datasets/halal-coins?status
 # ---------- Telegram ----------
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
-
+# تمييز البرنامج في رسائل Telegram (V3 / V4 / V5 ...)
+PROGRAM_TAG = "🤖 [V3]"
 if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
     log.warning("TELEGRAM_BOT_TOKEN أو TELEGRAM_CHAT_ID غير موجودين — سيعمل بدون إرسال.")
 
@@ -1298,7 +1299,7 @@ def compressed_gate(x):
 
 
 def format_compressed(x):
-    return f"""\U0001f9e8 PRE-PUMP COMPRESSED — إنذار مبكر (نمط ما قبل القفزة)
+    return f"""{PROGRAM_TAG} 🧨 PRE-PUMP COMPRESSED — إنذار مبكر
 
 ⚠️ إشارة تحليلية — ليست ضمانًا ولا أمر شراء. إنذار مبكر مش FINAL.
 
@@ -1414,7 +1415,7 @@ def okx_lead_scan(tickers, symbols):
         log_okx_lead(sym, t, chg_1h, chg_4h, premium, okx_price)
         c1 = f"{chg_1h:+.2f}%" if chg_1h is not None else "N/A"
         c4 = f"{chg_4h:+.2f}%" if chg_4h is not None else "N/A"
-        msg = f"""⚡ OKX LEAD ALERT — OKX بيتحرك قبل Binance
+        msg = f"""{PROGRAM_TAG} ⚡ OKX LEAD ALERT
 
 ⚠️ إشارة تحليلية — ليست ضمانًا ولا أمر شراء.
 الباك-تيست (أكبر 15 قفزة): OKX سبق Binance بمتوسط ~7.75 ساعة.
@@ -1491,7 +1492,7 @@ ATR14 used: {r['atr_used']:.2f}%
     if x.get("is_wash"):
         wash_warn = f"\n⚠️ تحذير: النمط يشبه Wash Trading — {x.get('wash_reason','')}\n"
 
-    return f"""🔥 FINAL EARLY-PUMP CANDIDATE
+    return f"""{PROGRAM_TAG} 🔥 FINAL EARLY-PUMP CANDIDATE
 
 ⚠️ إشارة تحليلية — ليست ضمانًا ولا أمر شراء.
 
