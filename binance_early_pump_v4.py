@@ -42,12 +42,12 @@ KLINES_LIMIT = 180
 
 # ---------- Scan ----------
 SCAN_EVERY_SECONDS = 300
-MIN_24H_QUOTE_VOLUME = 2_000_000   # ← V4.3: كان 3M
-MAX_24H_GAIN_PCT = 50.0            # ← V4.3: كان 35
-MIN_15M_GAIN = -3.0                # ← V4.3: كان -2
-MAX_15M_GAIN = 12.0                # ← V4.3: كان 10
+MIN_24H_QUOTE_VOLUME = 2_000_000
+MAX_24H_GAIN_PCT = 50.0
+MIN_15M_GAIN = -3.0
+MAX_15M_GAIN = 12.0
 MIN_1H_GAIN = -12.0
-MAX_1H_GAIN = 20.0                 # ← V4.3: كان 18
+MAX_1H_GAIN = 20.0
 
 # ---------- BTC Market Guard ----------
 BTC_CRASH_THRESHOLD_15M = -1.2
@@ -67,7 +67,7 @@ FINAL_MIN_VOLUME_1H = 2.0
 FINAL_MIN_ACCELERATION = 1.2
 FINAL_MAX_ACCELERATION = 4.5
 FINAL_MIN_24H_VOLUME = 2_000_000
-FINAL_MAX_24H_GAIN = 22.0          # ← V4.3: كان 12
+FINAL_MAX_24H_GAIN = 22.0
 FINAL_MAX_RSI = 78.0
 FINAL_MIN_BUY_PRESSURE = 0.55
 FINAL_MIN_GREEN_STREAK = 2
@@ -83,8 +83,8 @@ EXPLOSIVE_MIN_ACCELERATION = 1.5
 EXPLOSIVE_MAX_ACCELERATION = 4.0
 EXPLOSIVE_MIN_BUY_PRESSURE = 0.58
 EXPLOSIVE_MIN_24H_VOLUME = 2_000_000
-EXPLOSIVE_MAX_24H_GAIN = 25.0      # ← V4.3: كان 15
-EXPLOSIVE_MAX_1H_GAIN = 10.0       # ← V4.3: كان 8
+EXPLOSIVE_MAX_24H_GAIN = 25.0
+EXPLOSIVE_MAX_1H_GAIN = 10.0
 EXPLOSIVE_MAX_RSI = 76.0
 EXPLOSIVE_MAX_UPPER_WICK = 0.40
 EXPLOSIVE_MIN_BREAKOUT = -1.50
@@ -100,7 +100,7 @@ PERSISTENT_MIN_VOLUME_1H = 1.50
 PERSISTENT_MIN_PERSISTENCE = 2.00
 PERSISTENT_MIN_BUY_PRESSURE = 0.54
 PERSISTENT_MAX_1H_GAIN = 18.0
-PERSISTENT_MAX_24H_GAIN = 30.0     # ← V4.3: كان 15
+PERSISTENT_MAX_24H_GAIN = 30.0
 PERSISTENT_MAX_RSI = 80.0
 PERSISTENT_MAX_UPPER_WICK = 0.45
 PERSISTENT_MIN_BREAKOUT = -1.25
@@ -115,16 +115,16 @@ REVERSAL_MIN_VOLUME_15M = 3.00
 REVERSAL_MIN_VOLUME_1H = 1.70
 REVERSAL_MIN_BUY_PRESSURE = 0.54
 REVERSAL_MIN_24H_VOLUME = 2_000_000
-REVERSAL_MAX_24H_GAIN = 22.0       # ← V4.3: كان 12
+REVERSAL_MAX_24H_GAIN = 22.0
 REVERSAL_MAX_RSI = 78.0
 REVERSAL_MAX_UPPER_WICK = 0.45
 REVERSAL_MIN_BREAKOUT = -1.50
 REVERSAL_MIN_GREEN_STREAK = 2
 REVERSAL_MIN_TREND_CONTINUITY = 3
 
-# ---------- Short Squeeze lane (جديد من V4.2) ----------
+# ---------- Short Squeeze lane ----------
 SQUEEZE_FINAL_SCORE = 70
-SQUEEZE_MAX_FUNDING = -0.0005      # funding سالب (short crowded)
+SQUEEZE_MAX_FUNDING = -0.0005
 SQUEEZE_MIN_15M_MOVE = 1.0
 SQUEEZE_MIN_VOLUME_15M = 2.5
 SQUEEZE_MIN_BUY_PRESSURE = 0.55
@@ -155,7 +155,7 @@ EXCEPTIONAL_SCORE = 88
 CONFIRMATIONS_REQUIRED = 2
 CANDIDATE_EXPIRY_MINUTES = 45
 FINAL_COOLDOWN_HOURS = 12
-MIN_CANDIDATE_SCORE = 68           # ← V4.3: كان 70
+MIN_CANDIDATE_SCORE = 68
 
 # ---------- Cross-Exchange ----------
 BYBIT_BASE = "https://api.bybit.com"
@@ -171,7 +171,7 @@ SCAN_DIAGNOSTICS_FILE = "early_scan_diagnostics.csv"
 OKX_LEAD_MIN_1H_CHG = 2.5
 OKX_LEAD_MIN_4H_CHG = 5.0
 OKX_LEAD_MIN_PREMIUM = 1.0
-OKX_LEAD_MAX_24H_GAIN = 20.0       # ← V4.3: كان 15
+OKX_LEAD_MAX_24H_GAIN = 20.0
 OKX_LEAD_MIN_24H_VOLUME = 2_000_000
 OKX_LEAD_COOLDOWN_HOURS = 4
 
@@ -182,7 +182,7 @@ COMPRESSED_MAX_GAIN_4H = 3.0
 COMPRESSED_MIN_VOL_1H = 1.4
 COMPRESSED_MIN_VOL_15M = 1.2
 COMPRESSED_MAX_15M_GAIN = 2.5
-COMPRESSED_MAX_24H_GAIN = 20.0     # ← V4.3: كان 15
+COMPRESSED_MAX_24H_GAIN = 20.0
 COMPRESSED_MAX_RSI = 55.0
 COMPRESSED_COOLDOWN_HOURS = 4
 
@@ -221,7 +221,7 @@ cross_cache = {}
 okx_lead_alerted = {}
 compressed_alerted = {}
 diagnostics_last_logged = {}
-funding_rates_cache = {}          # ← V4.3: cache للـfunding
+funding_rates_cache = {}
 DIAGNOSTIC_COOLDOWN_MINUTES = 15
 SHARIAH_DIAGNOSTIC_COOLDOWN_HOURS = 24
 
@@ -235,7 +235,7 @@ def get_json(path, params=None, retries=3):
     for base in BASE_URLS:
         for attempt in range(retries):
             try:
-                r = session.get(base + path, params=params, timeout=15)
+                r = session.get(base + path, params=params, timeout=10)
                 if r.status_code == 451:
                     last_err = requests.HTTPError(f"451 from {base}", response=r)
                     break
@@ -269,11 +269,10 @@ def telegram_send(message):
 
 
 # ============================================================
-# BTC Market Guard + Funding Rate (جديد من V4.2)
+# BTC Market Guard + Funding Rate
 # ============================================================
 
 def check_btc_market_health():
-    """فحص اتجاه البيتكوين لمنع إعطاء إشارات في حالة الانهيار العام."""
     try:
         klines = get_json("/api/v3/klines", {"symbol": "BTCUSDT", "interval": "15m", "limit": 8})
         if not klines or len(klines) < 5:
@@ -289,7 +288,6 @@ def check_btc_market_health():
 
 
 def fetch_funding_rates_bulk():
-    """جلب كل معدلات التمويل في طلب واحد (بدل 400 طلب)."""
     global funding_rates_cache
     try:
         r = session.get(f"{FUTURES_BASE_URL}/fapi/v1/premiumIndex", timeout=10)
@@ -327,7 +325,6 @@ SHARIAH_COMPLIANT_BASES = {
 }
 SHARIAH_USER_APPROVED_BASES = {
     "W", "CTSI", "STRK", "OGN", "MET",
-    # V4.3: قائمة موسّعة مقترحة (يمكن تعديلها)
     "KAIA", "MAGIC", "BAT", "S", "CHIP", "CKB",
     "RLC", "NIL", "ERA", "MANTA", "PHA", "DIA", "BEAMX",
     "APT", "SEI", "TIA", "INJ", "FET", "RENDER",
@@ -336,7 +333,9 @@ SHARIAH_USER_APPROVED_BASES = {
     "KAVA", "CRV", "SNX", "COMP", "AAVE", "SUSHI",
     "OCEAN", "ANKR", "STORJ", "RSR", "CVC", "LRC",
 }
-SHARIAH_FILTER_ENABLED = False     # ← V4.3: معطّل مؤقتًا للتشخيص
+SHARIAH_FILTER_ENABLED = False
+
+
 def _extract_symbols_from_halalcrypto(payload):
     rows = payload
     if isinstance(payload, dict):
@@ -507,7 +506,7 @@ def get_tickers():
 
 
 # ============================================================
-# Math (Wilder صحيحة — إصلاح V4.2)
+# Math
 # ============================================================
 
 def pct(a, b):
@@ -665,7 +664,26 @@ def compute_risk_levels(entry, atr_val, rsi_val, liquidity):
         tp1_rr = min(tp1_rr, RISK_LOW_LIQ_TP1_RR)
         notes.append("سيولة منخفضة → TP1 أقرب")
 
-    tp2
+    tp2_rr = max(RISK_RR_TP2, tp1_rr + 0.5)
+
+    sl_price = entry * (1 - sl_pct / 100.0)
+    risk_per_unit = entry - sl_price
+    tp1_price = entry + risk_per_unit * tp1_rr
+    tp2_price = entry + risk_per_unit * tp2_rr
+
+    return {
+        "entry": entry,
+        "sl": sl_price,
+        "sl_pct": sl_pct,
+        "tp1": tp1_price,
+        "tp1_pct": pct(tp1_price, entry),
+        "tp1_rr": tp1_rr,
+        "tp2": tp2_price,
+        "tp2_pct": pct(tp2_price, entry),
+        "tp2_rr": tp2_rr,
+        "atr_used": atr_use,
+        "notes": notes,
+    }
     
 
 # ============================================================
@@ -1073,7 +1091,6 @@ def reversal_explosion_gate(x):
 
 
 def squeeze_gate(x):
-    """V4.3 جديد: Short Squeeze — funding سالب + سعر بدأ يتحرك."""
     sym = x.get("symbol", "")
     base = sym[:-4] if sym.endswith("USDT") else sym
     if base in STABLE_BASES or x.get("is_wash"):
@@ -1210,7 +1227,7 @@ def final_candidate_eligible(x):
         and reversal_explosion_gate(x)):
         return True
 
-    # 4) SQUEEZE مستقل (V4.3)
+    # 4) SQUEEZE مستقل
     if (x.get("score", 0) >= SQUEEZE_FINAL_SCORE
         and x.get("continuation_quality")
         and squeeze_gate(x)):
@@ -1713,6 +1730,17 @@ def init_results_file():
     except Exception as e:
         log.warning(f"TRACK_FILE duplicate cleanup skipped: {e}")
 
+    if os.path.exists(EARLY_WATCH_LOG_FILE):
+        try:
+            with open(EARLY_WATCH_LOG_FILE, "r", encoding="utf-8-sig", newline="") as f:
+                old_cols = next(csv.reader(f), [])
+            if "logged_time_utc" not in old_cols:
+                log.warning("EARLY_WATCH_LOG_FILE lacks logged_time_utc; kept untouched.")
+            elif old_cols != WATCH_LOG_HEADER:
+                log.info(f"EARLY_WATCH_LOG_FILE schema differs ({len(old_cols)} columns); kept legacy rows.")
+        except Exception as e:
+            log.warning(f"watch log schema check failed: {e}")
+
 
 def save_track(track):
     row = {
@@ -1997,13 +2025,11 @@ def load_state():
 def run_cycle(symbols):
     cycle_start = time.time()
 
-    # V4.3: BTC Market Guard
     btc_safe, btc_15m, btc_1h = check_btc_market_health()
     if not btc_safe:
         log.warning(f"⚠️ BTC crash: 15m={btc_15m:+.2f}% 1h={btc_1h:+.2f}% — توقف")
         return max(10, SCAN_EVERY_SECONDS - (time.time() - cycle_start))
 
-    # V4.3: تحديث funding rates (bulk)
     fetch_funding_rates_bulk()
 
     tickers = get_tickers()
