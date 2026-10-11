@@ -1,6 +1,14 @@
 # ============================================================
 # BINANCE EARLY-PUMP SCANNER V4.0 — دمج كامل
 # ============================================================
+# V4.1 (2026-10-11) — إصلاحات تتبع/تشخيص/حفظ GitHub فوق دمج V4.0:
+# [إصلاح] صف واحد لكل إشارة؛ تحديث checkpoints بدل إلحاق صف جديد.
+# [إصلاح] حفظ سجل FINAL فور صدوره ثم تحديثه في نفس الصف.
+# [إصلاح] تنظيف التكرارات القديمة في النتائج، مع الحفاظ على آخر صف لكل إشارة.
+# [إصلاح] تسجيل استبعادات فلتر الشريعة مرة كل 24 ساعة لكل زوج.
+# [إصلاح] تقليل تكرار التشخيص لكل زوج/سبب إلى مرة كل 15 دقيقة.
+# [إصلاح] عدم نقل early_watch_log القديم إلى .bak لمجرد اختلاف عدد الأعمدة.
+# [إصلاح] GitHub Actions لا يخفي أخطاء pull/push، ويعمل commit قبل pull --rebase.
 # V4.0 (2026-10-10) — دمج V3.2 + إضافات V3 + نتائج باك-تيست 30 يوم:
 # [من V3.2 — إلزامي] إضافة المرشحين عند score>=70 + مسار REVERSAL
 #   + استقلال PERSISTENT/REVERSAL + فلتر الشريعة التلقائي
@@ -210,6 +218,10 @@ early_watch_logged = {}
 cross_cache = {}
 okx_lead_alerted = {}
 compressed_alerted = {}
+# Throttle repeated diagnostic rows so the CSV remains useful and bounded.
+diagnostics_last_logged = {}
+DIAGNOSTIC_COOLDOWN_MINUTES = 15
+SHARIAH_DIAGNOSTIC_COOLDOWN_HOURS = 24
 
 
 # ============================================================
@@ -397,6 +409,8 @@ def update_shariah_list(force=False):
 def get_symbols():
     data = get_json("/api/v3/exchangeInfo")
     out = []
+    shariah_exclusions = []
+    now_iso = datetime.now(timezone.utc).isoformat()
     for s in data["symbols"]:
         if s.get("status") != "TRADING":
             continue
@@ -411,8 +425,13 @@ def get_symbols():
         if base in STABLECOIN_BASES or base in MEGA_CAP_BASES:
             continue
         if SHARIAH_FILTER_ENABLED and base not in SHARIAH_COMPLIANT_BASES:
+            shariah_exclusions.append({
+                "logged_time_utc": now_iso, "symbol": sym,
+                "stage": "SHARIAH_FILTER", "reason": "NOT_IN_COMPLIANT_LIST",
+            })
             continue
         out.append(sym)
+    append_scan_diagnostics(shariah_exclusions)
     return out
 
 
@@ -1437,7 +1456,7 @@ Binance 24h Volume: ${t['quote_volume']:,.0f}
 
 
 def append_scan_diagnostics(rows):
-    """Append per-symbol scan decisions so missed coins can be audited later."""
+    """Append diagnostic decisions, throttling repeated identical reasons per symbol."""
     if not rows:
         return
     columns = [
@@ -1446,12 +1465,26 @@ def append_scan_diagnostics(rows):
         "volume_1h", "acceleration", "buy_pressure", "trend_continuity",
         "green_streak", "is_wash", "quote_volume",
     ]
+    now = time.time()
+    accepted = []
+    for row in rows:
+        key = "|".join(str(row.get(k, "")) for k in ("symbol", "stage", "reason"))
+        last = diagnostics_last_logged.get(key, 0)
+        cooldown = (SHARIAH_DIAGNOSTIC_COOLDOWN_HOURS * 3600
+                    if row.get("stage") == "SHARIAH_FILTER"
+                    else DIAGNOSTIC_COOLDOWN_MINUTES * 60)
+        if now - last < cooldown:
+            continue
+        accepted.append(row)
+        diagnostics_last_logged[key] = now
+    if not accepted:
+        return
     exists = os.path.exists(SCAN_DIAGNOSTICS_FILE)
     with open(SCAN_DIAGNOSTICS_FILE, "a", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=columns, extrasaction="ignore")
         if not exists or os.path.getsize(SCAN_DIAGNOSTICS_FILE) == 0:
             writer.writeheader()
-        for row in rows:
+        for row in accepted:
             writer.writerow({key: row.get(key, "") for key in columns})
 
 
@@ -1632,27 +1665,49 @@ def init_results_file():
         try:
             with open(TRACK_FILE, "r", encoding="utf-8-sig") as f:
                 old_cols = f.readline().strip().split(",")
-            if len(old_cols) != len(columns):
+            if old_cols != columns:
                 os.replace(TRACK_FILE, TRACK_FILE + ".bak")
                 pd.DataFrame(columns=columns).to_csv(TRACK_FILE, index=False)
                 log.warning(f"TRACK_FILE كان بهيدر قديم ({len(old_cols)} عمود) — اتنقل لـ .bak واتعمل ملف نظيف ({len(columns)} عمود)")
         except Exception as e:
             log.warning(f"init_results_file migration failed: {e}")
 
-    # نفس الفكرة لسجل المراقبة: هيدر قديم 14 عمود → ميجرايشن
+    # Repair duplicate rows produced by older versions; keep the latest per signal.
+    try:
+        if os.path.exists(TRACK_FILE) and os.path.getsize(TRACK_FILE) > 0:
+            df = pd.read_csv(TRACK_FILE)
+            if {"final_time_utc", "symbol"}.issubset(df.columns):
+                before = len(df)
+                df = df.drop_duplicates(subset=["final_time_utc", "symbol"], keep="last")
+                removed = before - len(df)
+                if removed:
+                    tmp = TRACK_FILE + ".dedupe.tmp"
+                    df.to_csv(tmp, index=False)
+                    os.replace(tmp, TRACK_FILE)
+                    log.warning(f"TRACK_FILE: تم حذف {removed} صف مكرر لنفس الإشارة.")
+    except Exception as e:
+        log.warning(f"TRACK_FILE duplicate cleanup skipped safely: {e}")
+
+    # سجل المراقبة القديم قد يحتوي أعمدة إضافية/أقل؛ لا ننقله تلقائيًا إلى .bak.
     if os.path.exists(EARLY_WATCH_LOG_FILE):
         try:
-            with open(EARLY_WATCH_LOG_FILE, "r", encoding="utf-8-sig") as f:
-                old_cols = f.readline().strip().split(",")
-            if old_cols != WATCH_LOG_HEADER:
-                os.replace(EARLY_WATCH_LOG_FILE, EARLY_WATCH_LOG_FILE + ".bak")
-                log.warning(f"EARLY_WATCH_LOG_FILE بهيدر قديم ({len(old_cols)} عمود) — اتنقل لـ .bak")
+            with open(EARLY_WATCH_LOG_FILE, "r", encoding="utf-8-sig", newline="") as f:
+                old_cols = next(csv.reader(f), [])
+            if "logged_time_utc" not in old_cols:
+                log.warning("EARLY_WATCH_LOG_FILE lacks logged_time_utc; original file kept untouched.")
+            elif old_cols != WATCH_LOG_HEADER:
+                log.info(
+                    f"EARLY_WATCH_LOG_FILE schema differs ({len(old_cols)} columns); "
+                    "keeping legacy rows in place for 4-day cleanup."
+                )
         except Exception as e:
-            log.warning(f"watch log migration failed: {e}")
-
+            log.warning(f"watch log schema check failed safely: {e}")
 
 
 def save_track(track):
+    """Upsert one row per signal (symbol + final timestamp), rather than appending
+    a fresh row at every tracking checkpoint. Checkpoint columns are updated in place.
+    """
     row = {
         "final_time_utc": track["final_time_utc"],
         "symbol": track["symbol"],
@@ -1684,13 +1739,37 @@ def save_track(track):
         "result_24h": track["results"].get(1440),
         "status": track["status"],
     }
-    pd.DataFrame([row]).to_csv(
-        TRACK_FILE,
-        mode="a",
-        header=not os.path.exists(TRACK_FILE),
-        index=False,
-    )
-
+    columns = list(row.keys())
+    try:
+        if os.path.exists(TRACK_FILE) and os.path.getsize(TRACK_FILE) > 0:
+            df = pd.read_csv(TRACK_FILE, dtype={"symbol": str, "final_time_utc": str})
+            # Keep the known schema order and preserve any unexpected legacy columns.
+            for col in columns:
+                if col not in df.columns:
+                    df[col] = ""
+            extra = [c for c in df.columns if c not in columns]
+            ordered = columns + extra
+            mask = (df["symbol"].astype(str) == str(row["symbol"])) & (
+                df["final_time_utc"].astype(str) == str(row["final_time_utc"]))
+            matches = df.index[mask].tolist()
+            if matches:
+                # Update the most recent matching row and remove duplicates for this signal.
+                idx = matches[-1]
+                for col, value in row.items():
+                    df.at[idx, col] = value
+                if len(matches) > 1:
+                    df = df.drop(index=matches[:-1])
+            else:
+                df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+            df = df.reindex(columns=ordered)
+        else:
+            df = pd.DataFrame([row], columns=columns)
+        tmp = TRACK_FILE + ".tmp"
+        df.to_csv(tmp, index=False)
+        os.replace(tmp, TRACK_FILE)
+    except Exception as e:
+        log.exception(f"save_track upsert failed for {row['symbol']}: {e}")
+        raise
 
 def update_tracking(tickers):
     now = time.time()
@@ -1783,6 +1862,8 @@ def start_final_tracking(x):
         "start_ts": time.time(),
         "status": "TRACKING",
     }
+    # Persist the signal immediately; later checkpoints update this same CSV row.
+    save_track(active_tracks[x["symbol"]])
 
 
 # ============================================================
@@ -1884,6 +1965,7 @@ def save_state():
         "early_watch_logged": early_watch_logged,
         "okx_lead_alerted": okx_lead_alerted,
         "compressed_alerted": compressed_alerted,
+        "diagnostics_last_logged": diagnostics_last_logged,
     }
     try:
         with open(STATE_FILE, "w", encoding="utf-8") as f:
@@ -1909,6 +1991,7 @@ def load_state():
     early_watch_logged.update(state.get("early_watch_logged", {}))
     okx_lead_alerted.update(state.get("okx_lead_alerted", {}))
     compressed_alerted.update(state.get("compressed_alerted", {}))
+    diagnostics_last_logged.update(state.get("diagnostics_last_logged", {}))
 
     for sym, tr in state.get("active_tracks", {}).items():
         tr["results"] = {int(k): v for k, v in tr.get("results", {}).items()}
