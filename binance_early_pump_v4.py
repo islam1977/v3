@@ -281,7 +281,7 @@ SHARIAH_COMPLIANT_BASES = {
     "TRX", "SUI", "CTSI", "STRK", "W", "OGN", "MET",
 }
 SHARIAH_USER_APPROVED_BASES = {"W", "CTSI", "STRK", "OGN", "MET"}
-SHARIAH_FILTER_ENABLED = True
+SHARIAH_FILTER_ENABLED = False
 
 
 def _extract_symbols_from_halalcrypto(payload):
