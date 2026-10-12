@@ -1422,9 +1422,10 @@ def maybe_compressed_alert(x, now):
     for s in [s for s, t in compressed_alerted.items() if t < cutoff]:
         compressed_alerted.pop(s, None)
     log_early_watch(x, now)
-    msg = format_compressed(x)
-    telegram_send(msg)
-    log.info(f"🧨 COMPRESSED alert: {sym} breakout={x['breakout']:+.2f}% 4h={x.get('4h', 0):+.2f}%")
+    # Telegram DISABLED — log only (user request)
+    # msg = format_compressed(x)
+    # telegram_send(msg)
+    log.info(f"🧨 COMPRESSED (no telegram): {sym} breakout={x['breakout']:+.2f}% 4h={x.get('4h', 0):+.2f}%")
     return True
 
 
