@@ -347,7 +347,7 @@ SHARIAH_USER_APPROVED_BASES = {
     'TRX', 'TWT', 'UTK', 'VET', 'VITE', 'VTHO', 'W', 'WAN',
     'WIF', 'XLM', 'XRP', 'XTZ', 'ZAKI', 'ZEC', 'ZEN', 'ZIL',
 }
-SHARIAH_FILTER_ENABLED = False
+SHARIAH_FILTER_ENABLED = True
 
 
 def _extract_symbols_from_halalcrypto(payload):
