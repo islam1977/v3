@@ -1382,8 +1382,10 @@ def compressed_gate(x):
         and x.get("volume_15m", 0) >= COMPRESSED_MIN_VOL_15M
         and x.get("15m", 999) <= COMPRESSED_MAX_15M_GAIN
         and x.get("24h", 999) <= COMPRESSED_MAX_24H_GAIN
-        and (rsi is None or rsi <= COMPRESSED_MAX_RSI)
-        and x.get("quote_volume", 0) >= MIN_24H_QUOTE_VOLUME
+        and rsi is not None
+        and COMPRESSED_MIN_RSI <= rsi <= COMPRESSED_MAX_RSI
+        and x.get("buy_pressure", 0) >= COMPRESSED_MIN_BUY_PRESSURE
+        and x.get("quote_volume", 0) >= COMPRESSED_MIN_LIQUIDITY_VOL
     )
 
 
