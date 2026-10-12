@@ -323,15 +323,29 @@ SHARIAH_COMPLIANT_BASES = {
     "ATOM", "FIL", "HNT", "ICP", "XMR", "NEAR", "THETA", "TON",
     "TRX", "SUI", "CTSI", "STRK", "W", "OGN", "MET",
 }
+# User-supplied approved base symbols; values are normalized and deduplicated.
 SHARIAH_USER_APPROVED_BASES = {
-    "W", "CTSI", "STRK", "OGN", "MET",
-    "KAIA", "MAGIC", "BAT", "S", "CHIP", "CKB",
-    "RLC", "NIL", "ERA", "MANTA", "PHA", "DIA", "BEAMX",
-    "APT", "SEI", "TIA", "INJ", "FET", "RENDER",
-    "ARB", "OP", "LDO", "ENS", "GRT", "SAND", "MANA", "GALA",
-    "AXS", "CHZ", "ENJ", "IMX", "FLOW", "ROSE", "ONE",
-    "KAVA", "CRV", "SNX", "COMP", "AAVE", "SUSHI",
-    "OCEAN", "ANKR", "STORJ", "RSR", "CVC", "LRC",
+    '1000CAT', 'AAVE', 'ACM', 'ADA', 'AGLD', 'ALGO', 'ALICE', 'ANKR',
+    'APT', 'AR', 'ARB', 'ARPA', 'ASR', 'ATA', 'ATM', 'ATOM',
+    'AVA', 'AVAX', 'AXS', 'BAND', 'BAT', 'BCH', 'BEAMX', 'BIO',
+    'BNT', 'BTC', 'CELO', 'CELR', 'CFX', 'CHIP', 'CHR', 'CHZ',
+    'CKB', 'COMP', 'COS', 'CRV', 'CTK', 'CTSI', 'CTXC', 'CVC',
+    'DASH', 'DATA', 'DCR', 'DENT', 'DGB', 'DIA', 'DOGE', 'DOT',
+    'DUSK', 'EGLD', 'ENJ', 'ENS', 'EOS', 'ERA', 'ERN', 'ETC',
+    'ETH', 'EUR', 'FET', 'FIL', 'FIO', 'FIRO', 'FIS', 'FLOW',
+    'FTM', 'FUN', 'GALA', 'GRT', 'GTC', 'HIVE', 'HOOK', 'HOT',
+    'ICP', 'ICX', 'IMX', 'INJ', 'IOST', 'IOTA', 'IOTX', 'JUV',
+    'KAIA', 'KAVA', 'KMD', 'LDO', 'LINA', 'LINK', 'LIT', 'LPT',
+    'LRC', 'LSK', 'LTC', 'LTO', 'MAGIC', 'MANA', 'MANTA', 'MASK',
+    'MBL', 'MDT', 'ME', 'MET', 'MINA', 'MTL', 'NEAR', 'NEO',
+    'NFP', 'NIL', 'NULS', 'OCEAN', 'OG', 'OGN', 'ONE', 'ONG',
+    'ONT', 'OP', 'ORDI', 'OXT', 'PAXG', 'PEPE', 'PHA', 'POND',
+    'PSG', 'PUNSIX', 'QNT', 'QUTM', 'RENDER', 'RIF', 'RLC', 'ROSE',
+    'RSR', 'RVN', 'S', 'SAND', 'SC', 'SEI', 'SFP', 'SKL',
+    'SLP', 'SNX', 'SOL', 'STMX', 'STORJ', 'STPT', 'STRAX', 'STRK',
+    'STX', 'SUI', 'SUSHI', 'SXP', 'TFUEL', 'THETA', 'TIA', 'TLM',
+    'TRX', 'TWT', 'UTK', 'VET', 'VITE', 'VTHO', 'W', 'WAN',
+    'WIF', 'XLM', 'XRP', 'XTZ', 'ZAKI', 'ZEC', 'ZEN', 'ZIL',
 }
 SHARIAH_FILTER_ENABLED = False
 
@@ -374,17 +388,19 @@ def _extract_symbols_from_crypto_ummmah(text):
 
 
 def load_user_shariah_overrides():
+    """Return deduplicated built-in approvals plus optional local JSON approvals."""
+    approved = {str(x).strip().upper() for x in SHARIAH_USER_APPROVED_BASES if str(x).strip()}
     filename = "shariah_user_overrides.json"
     if not os.path.exists(filename):
-        return set(SHARIAH_USER_APPROVED_BASES)
+        return approved
     try:
         with open(filename, "r", encoding="utf-8") as f:
             data = json.load(f)
         vals = data.get("approved_symbols", []) if isinstance(data, dict) else []
-        return {str(x).strip().upper() for x in vals if isinstance(x, str) and x.strip()}
+        approved.update(str(x).strip().upper() for x in vals if isinstance(x, str) and x.strip())
     except Exception as e:
         log.warning(f"Shariah overrides load failed: {e}")
-        return set(SHARIAH_USER_APPROVED_BASES)
+    return approved
 
 
 def load_shariah_cache():
