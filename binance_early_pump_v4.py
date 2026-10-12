@@ -1,17 +1,7 @@
 # ============================================================
 # BINANCE EARLY-PUMP SCANNER V4.3 — دمج V4.1 + ميزات V4.2
 # ============================================================
-# V4.3 (2026-10-11) — دمج كامل:
-# [جديد من V4.2] BTC Market Guard: إيقاف الإشارات عند انهيار السوق
-# [جديد من V4.2] Funding Rate (bulk) + Short Squeeze lane
-# [جديد من V4.2] Cumulative Taker Delta (buy_pressure محسّن)
-# [إصلاح V4.2] Funding bulk fetch: 1 طلب بدل 400
-# [إصلاح V4.2] ATR/RSI: نسخة Wilder صحيحة
-# [إصلاح V4.2] SHARIAH_COMPLIANT_BASES: 30+ عملة
-# [إصلاح V4.2] MAX_24H_GAIN_PCT: 50
-# [إصلاح V4.2] MIN_24H_QUOTE_VOLUME: 2M
-# [إصلاح V4.2] MIN_CANDIDATE_SCORE: 68
-# [محتفظ من V4.1] كل الـlanes + تأكيد + cooldown + tracking
+# V4.3 (2026-10-11) — دمج كامل + تعديلات المرونة لاغتنام الفرص
 # ============================================================
 
 import requests, time, math, csv, os, json, sys, logging, re, html
@@ -40,95 +30,95 @@ STATE_FILE = "scanner_state.json"
 INTERVAL = "5m"
 KLINES_LIMIT = 180
 
-# ---------- Scan ----------
+# ---------- Scan (تم توسيع السقف ومرونة النطاق) ----------
 SCAN_EVERY_SECONDS = 300
 MIN_24H_QUOTE_VOLUME = 2_000_000
-MAX_24H_GAIN_PCT = 50.0
-MIN_15M_GAIN = -3.0
-MAX_15M_GAIN = 12.0
-MIN_1H_GAIN = -12.0
-MAX_1H_GAIN = 20.0
+MAX_24H_GAIN_PCT = 80.0
+MIN_15M_GAIN = -4.0
+MAX_15M_GAIN = 15.0
+MIN_1H_GAIN = -15.0
+MAX_1H_GAIN = 25.0
 
 # ---------- BTC Market Guard ----------
-BTC_CRASH_THRESHOLD_15M = -1.2
-BTC_CRASH_THRESHOLD_1H = -2.5
+BTC_CRASH_THRESHOLD_15M = -1.5
+BTC_CRASH_THRESHOLD_1H = -3.0
 
-# ---------- Wash Trading Detector ----------
+# ---------- Wash Trading Detector (تخفيف الحساسية لمنع استبعاد المشاريع الكبرى) ----------
 WASH_MAX_PRICE_MOVE_FOR_BIG_VOL = 0.5
-WASH_ACCEL_THRESHOLD = 5.0
-WASH_VOL_1H_THRESHOLD = 6.0
-WASH_VOL_15M_HARD_CAP = 18.0
+WASH_ACCEL_THRESHOLD = 7.0
+WASH_VOL_1H_THRESHOLD = 8.0
+WASH_VOL_15M_HARD_CAP = 20.0
 
-# ---------- FINAL gate ----------
-FINAL_MIN_15M_MOVE = 1.25
-FINAL_MIN_5M_MOVE = 0.25
-FINAL_MIN_VOLUME_15M = 4.0
-FINAL_MIN_VOLUME_1H = 2.0
-FINAL_MIN_ACCELERATION = 1.2
-FINAL_MAX_ACCELERATION = 4.5
+# ---------- FINAL gate (تخفيف الشروط للسرعة) ----------
+FINAL_MIN_15M_MOVE = 1.0
+FINAL_MIN_5M_MOVE = 0.20
+FINAL_MIN_VOLUME_15M = 3.0
+FINAL_MIN_VOLUME_1H = 1.8
+FINAL_MIN_ACCELERATION = 1.1
+FINAL_MAX_ACCELERATION = 5.0
 FINAL_MIN_24H_VOLUME = 2_000_000
-FINAL_MAX_24H_GAIN = 22.0
-FINAL_MAX_RSI = 78.0
-FINAL_MIN_BUY_PRESSURE = 0.55
+FINAL_MAX_24H_GAIN = 40.0
+FINAL_MAX_RSI = 80.0
+FINAL_MIN_BUY_PRESSURE = 0.52
 FINAL_MIN_GREEN_STREAK = 2
-FINAL_MIN_TREND_CONTINUITY = 3
+FINAL_MIN_TREND_CONTINUITY = 2
 
 # ---------- EXPLOSIVE EARLY ----------
-EXPLOSIVE_MIN_5M_MOVE = 1.0
-EXPLOSIVE_MIN_15M_MOVE = 0.8
-EXPLOSIVE_MIN_VOLUME_15M = 4.0
-EXPLOSIVE_MAX_VOLUME_15M = 12.0
-EXPLOSIVE_MIN_VOLUME_1H = 2.0
-EXPLOSIVE_MIN_ACCELERATION = 1.5
-EXPLOSIVE_MAX_ACCELERATION = 4.0
-EXPLOSIVE_MIN_BUY_PRESSURE = 0.58
+EXPLOSIVE_MIN_5M_MOVE = 0.8
+EXPLOSIVE_MIN_15M_MOVE = 0.7
+EXPLOSIVE_MIN_VOLUME_15M = 3.0
+EXPLOSIVE_MAX_VOLUME_15M = 15.0
+EXPLOSIVE_MIN_VOLUME_1H = 1.8
+EXPLOSIVE_MIN_ACCELERATION = 1.3
+EXPLOSIVE_MAX_ACCELERATION = 4.5
+EXPLOSIVE_MIN_BUY_PRESSURE = 0.54
 EXPLOSIVE_MIN_24H_VOLUME = 2_000_000
-EXPLOSIVE_MAX_24H_GAIN = 25.0
-EXPLOSIVE_MAX_1H_GAIN = 10.0
-EXPLOSIVE_MAX_RSI = 76.0
-EXPLOSIVE_MAX_UPPER_WICK = 0.40
-EXPLOSIVE_MIN_BREAKOUT = -1.50
-EXPLOSIVE_MIN_GREEN_STREAK = 3
-EXPLOSIVE_MIN_TREND_CONTINUITY = 4
+EXPLOSIVE_MAX_24H_GAIN = 45.0
+EXPLOSIVE_MAX_1H_GAIN = 15.0
+EXPLOSIVE_MAX_RSI = 78.0
+EXPLOSIVE_MAX_UPPER_WICK = 0.45
+EXPLOSIVE_MIN_BREAKOUT = -2.00
+EXPLOSIVE_MIN_GREEN_STREAK = 2
+EXPLOSIVE_MIN_TREND_CONTINUITY = 2
 
 # ---------- Persistent lane ----------
-PERSISTENT_FINAL_SCORE = 70
-PERSISTENT_MIN_5M_MOVE = 0.70
-PERSISTENT_MIN_15M_MOVE = 1.25
-PERSISTENT_MIN_VOLUME_15M = 2.50
-PERSISTENT_MIN_VOLUME_1H = 1.50
-PERSISTENT_MIN_PERSISTENCE = 2.00
-PERSISTENT_MIN_BUY_PRESSURE = 0.54
-PERSISTENT_MAX_1H_GAIN = 18.0
-PERSISTENT_MAX_24H_GAIN = 30.0
-PERSISTENT_MAX_RSI = 80.0
-PERSISTENT_MAX_UPPER_WICK = 0.45
-PERSISTENT_MIN_BREAKOUT = -1.25
+PERSISTENT_FINAL_SCORE = 65
+PERSISTENT_MIN_5M_MOVE = 0.50
+PERSISTENT_MIN_15M_MOVE = 1.00
+PERSISTENT_MIN_VOLUME_15M = 2.20
+PERSISTENT_MIN_VOLUME_1H = 1.40
+PERSISTENT_MIN_PERSISTENCE = 1.80
+PERSISTENT_MIN_BUY_PRESSURE = 0.52
+PERSISTENT_MAX_1H_GAIN = 22.0
+PERSISTENT_MAX_24H_GAIN = 45.0
+PERSISTENT_MAX_RSI = 82.0
+PERSISTENT_MAX_UPPER_WICK = 0.50
+PERSISTENT_MIN_BREAKOUT = -1.50
 PERSISTENT_MIN_GREEN_STREAK = 2
-PERSISTENT_MIN_TREND_CONTINUITY = 3
+PERSISTENT_MIN_TREND_CONTINUITY = 2
 
 # ---------- Reversal lane ----------
-REVERSAL_FINAL_SCORE = 72
-REVERSAL_MIN_5M_MOVE = 0.50
-REVERSAL_MIN_15M_MOVE = 1.25
-REVERSAL_MIN_VOLUME_15M = 3.00
-REVERSAL_MIN_VOLUME_1H = 1.70
-REVERSAL_MIN_BUY_PRESSURE = 0.54
+REVERSAL_FINAL_SCORE = 68
+REVERSAL_MIN_5M_MOVE = 0.40
+REVERSAL_MIN_15M_MOVE = 1.00
+REVERSAL_MIN_VOLUME_15M = 2.50
+REVERSAL_MIN_VOLUME_1H = 1.50
+REVERSAL_MIN_BUY_PRESSURE = 0.52
 REVERSAL_MIN_24H_VOLUME = 2_000_000
-REVERSAL_MAX_24H_GAIN = 22.0
-REVERSAL_MAX_RSI = 78.0
-REVERSAL_MAX_UPPER_WICK = 0.45
-REVERSAL_MIN_BREAKOUT = -1.50
+REVERSAL_MAX_24H_GAIN = 35.0
+REVERSAL_MAX_RSI = 80.0
+REVERSAL_MAX_UPPER_WICK = 0.50
+REVERSAL_MIN_BREAKOUT = -2.00
 REVERSAL_MIN_GREEN_STREAK = 2
-REVERSAL_MIN_TREND_CONTINUITY = 3
+REVERSAL_MIN_TREND_CONTINUITY = 2
 
 # ---------- Short Squeeze lane ----------
-SQUEEZE_FINAL_SCORE = 70
-SQUEEZE_MAX_FUNDING = -0.0005
-SQUEEZE_MIN_15M_MOVE = 1.0
-SQUEEZE_MIN_VOLUME_15M = 2.5
-SQUEEZE_MIN_BUY_PRESSURE = 0.55
-SQUEEZE_MAX_24H_GAIN = 20.0
+SQUEEZE_FINAL_SCORE = 65
+SQUEEZE_MAX_FUNDING = -0.0004
+SQUEEZE_MIN_15M_MOVE = 0.8
+SQUEEZE_MIN_VOLUME_15M = 2.2
+SQUEEZE_MIN_BUY_PRESSURE = 0.52
+SQUEEZE_MAX_24H_GAIN = 35.0
 
 STABLE_BASES = {
     "USDT", "USDC", "FDUSD", "TUSD", "USDP", "DAI",
@@ -144,18 +134,18 @@ RISK_RR_TP1 = 1.5
 RISK_RR_TP2 = 3.0
 RISK_HIGH_ATR_THRESHOLD = 6.0
 RISK_HIGH_ATR_TP1_RR = 1.2
-RISK_HIGH_RSI_THRESHOLD = 76.0
+RISK_HIGH_RSI_THRESHOLD = 78.0
 RISK_HIGH_RSI_TP1_RR = 1.0
 RISK_LOW_LIQ_TP1_RR = 1.0
 
-# ---------- Scores ----------
-WATCH_SCORE = 65
-FINAL_SCORE = 80
+# ---------- Scores (تخفيض العتبة بناءً على تحليل اللوجات) ----------
+WATCH_SCORE = 60
+FINAL_SCORE = 75
 EXCEPTIONAL_SCORE = 88
 CONFIRMATIONS_REQUIRED = 2
 CANDIDATE_EXPIRY_MINUTES = 45
 FINAL_COOLDOWN_HOURS = 12
-MIN_CANDIDATE_SCORE = 68
+MIN_CANDIDATE_SCORE = 62
 
 # ---------- Cross-Exchange ----------
 BYBIT_BASE = "https://api.bybit.com"
@@ -168,22 +158,22 @@ CROSS_CACHE_TTL_SECONDS = 300
 SCAN_DIAGNOSTICS_FILE = "early_scan_diagnostics.csv"
 
 # ---------- OKX Lead Watcher ----------
-OKX_LEAD_MIN_1H_CHG = 2.5
-OKX_LEAD_MIN_4H_CHG = 5.0
-OKX_LEAD_MIN_PREMIUM = 1.0
-OKX_LEAD_MAX_24H_GAIN = 20.0
+OKX_LEAD_MIN_1H_CHG = 2.0
+OKX_LEAD_MIN_4H_CHG = 4.0
+OKX_LEAD_MIN_PREMIUM = 0.8
+OKX_LEAD_MAX_24H_GAIN = 30.0
 OKX_LEAD_MIN_24H_VOLUME = 2_000_000
 OKX_LEAD_COOLDOWN_HOURS = 4
 
 # ---------- Pre-Pump Compressed ----------
 COMPRESSED_MAX_BREAKOUT = -6.0
-COMPRESSED_MIN_GAIN_4H = 0.25
-COMPRESSED_MAX_GAIN_4H = 3.0
-COMPRESSED_MIN_VOL_1H = 1.4
-COMPRESSED_MIN_VOL_15M = 1.2
-COMPRESSED_MAX_15M_GAIN = 2.5
-COMPRESSED_MAX_24H_GAIN = 20.0
-COMPRESSED_MAX_RSI = 55.0
+COMPRESSED_MIN_GAIN_4H = 0.20
+COMPRESSED_MAX_GAIN_4H = 3.5
+COMPRESSED_MIN_VOL_1H = 1.3
+COMPRESSED_MIN_VOL_15M = 1.1
+COMPRESSED_MAX_15M_GAIN = 3.0
+COMPRESSED_MAX_24H_GAIN = 30.0
+COMPRESSED_MAX_RSI = 58.0
 COMPRESSED_COOLDOWN_HOURS = 4
 
 # ---------- Tracking ----------
@@ -323,7 +313,6 @@ SHARIAH_COMPLIANT_BASES = {
     "ATOM", "FIL", "HNT", "ICP", "XMR", "NEAR", "THETA", "TON",
     "TRX", "SUI", "CTSI", "STRK", "W", "OGN", "MET",
 }
-# User-supplied approved base symbols; values are normalized and deduplicated.
 SHARIAH_USER_APPROVED_BASES = {
     '1000CAT', 'AAVE', 'ACM', 'ADA', 'AGLD', 'ALGO', 'ALICE', 'ANKR',
     'APT', 'AR', 'ARB', 'ARPA', 'ASR', 'ATA', 'ATM', 'ATOM',
@@ -388,7 +377,6 @@ def _extract_symbols_from_crypto_ummmah(text):
 
 
 def load_user_shariah_overrides():
-    """Return deduplicated built-in approvals plus optional local JSON approvals."""
     approved = {str(x).strip().upper() for x in SHARIAH_USER_APPROVED_BASES if str(x).strip()}
     filename = "shariah_user_overrides.json"
     if not os.path.exists(filename):
@@ -637,20 +625,19 @@ def is_likely_wash_trading(x):
     v15 = x.get("volume_15m", 0)
     v1h = x.get("volume_1h", 0)
     accel = x.get("acceleration", 0)
-    g5 = x.get("5m", 0)
     g15 = x.get("15m", 0)
     g1h = x.get("1h", 0)
 
     if v15 > WASH_VOL_15M_HARD_CAP:
-        return True, "vol_15m شاذ (>18x)"
+        return True, "vol_15m شاذ (>20x)"
 
-    if v15 > 10 and abs(g15) < WASH_MAX_PRICE_MOVE_FOR_BIG_VOL:
+    if v15 > 12 and abs(g15) < WASH_MAX_PRICE_MOVE_FOR_BIG_VOL:
         return True, f"vol_15m={v15:.1f}x مع 15m={g15:+.2f}%"
 
-    if accel > WASH_ACCEL_THRESHOLD and abs(g15) < 1.0:
+    if accel > WASH_ACCEL_THRESHOLD and abs(g15) < 0.8:
         return True, f"accel={accel:.1f}x مع 15m={g15:+.2f}%"
 
-    if v1h > WASH_VOL_1H_THRESHOLD and abs(g1h) < 1.0:
+    if v1h > WASH_VOL_1H_THRESHOLD and abs(g1h) < 0.8:
         return True, f"vol_1h={v1h:.1f}x مع 1h={g1h:+.2f}%"
 
     return False, ""
@@ -700,7 +687,7 @@ def compute_risk_levels(entry, atr_val, rsi_val, liquidity):
         "atr_used": atr_use,
         "notes": notes,
     }
-    
+
 
 # ============================================================
 # Analyze
@@ -816,7 +803,6 @@ def analyze(symbol, ticker):
         "1h": gain_1h,
     })
 
-    # Funding rate (V4.3 — من cache)
     funding_rate = funding_rates_cache.get(symbol, 0.0)
 
     volume_persistence = min(volume_ratio_15m, volume_ratio_1h)
@@ -824,143 +810,82 @@ def analyze(symbol, ticker):
     distance_from_1h_high = pct(price, recent_high_1h) if recent_high_1h else 0.0
     efficiency = abs(gain_15m) / max(volume_ratio_15m, 1.0)
 
-    # ---------- SCORE ----------
+    # ---------- SCORE (تم تخفيف الشروط لتسهيل التقاط الفرص المبكرة) ----------
     score = 0
 
-    if volume_ratio_1h >= 6 and gain_15m >= 1.5:
+    if volume_ratio_1h >= 4 and gain_15m >= 0.5:
         score += 16
-    elif volume_ratio_1h >= 6 and gain_15m >= 0.5:
-        score += 8
-    elif volume_ratio_1h >= 4 and gain_15m >= 1.0:
-        score += 12
-    elif volume_ratio_1h >= 4:
-        score += 5
-    elif volume_ratio_1h >= 2.5:
+    elif volume_ratio_1h >= 3 and gain_15m >= 0.2:
+        score += 10
+    elif volume_ratio_1h >= 2.0:
         score += 7
-    elif volume_ratio_1h >= 1.7:
+    elif volume_ratio_1h >= 1.4:
         score += 4
 
-    if volume_ratio_15m >= 10 and gain_15m >= 1.5:
-        score += 10
-    elif volume_ratio_15m >= 6 and gain_15m >= 1.0:
-        score += 8
-    elif volume_ratio_15m >= 3:
-        score += 5
-    elif volume_ratio_15m >= 2:
+    if volume_ratio_15m >= 4 and gain_15m >= 0.5:
+        score += 12
+    elif volume_ratio_15m >= 2.2:
+        score += 6
+    elif volume_ratio_15m >= 1.5:
         score += 3
 
-    if volume_persistence >= 3:
+    if volume_persistence >= 2.0:
         score += 6
-    elif volume_persistence >= 2:
+    elif volume_persistence >= 1.3:
         score += 4
-    elif volume_persistence >= 1.5:
-        score += 2
 
-    if 1.3 <= acceleration <= 3.0 and prior_acceleration >= 1.2:
+    if 1.1 <= acceleration <= 4.0:
         score += 6
-    elif 1.3 <= acceleration <= 3.0:
-        score += 4
-    elif acceleration > 4.5:
-        score -= 5
 
-    if 0.5 <= gain_15m <= 4:
+    if 0.2 <= gain_15m <= 6:
         score += 12
-    elif 0 <= gain_15m < 0.5:
-        score += 8
-    elif 4 < gain_15m <= 6:
+    elif 0 <= gain_15m < 0.2:
         score += 6
-    elif 6 < gain_15m <= 10:
-        score += 1
 
-    if 0.5 <= gain_1h <= 5:
+    if 0.2 <= gain_1h <= 8:
         score += 8
-    elif 0 <= gain_1h < 0.5:
-        score += 5
-    elif 5 < gain_1h <= 8:
+    elif 0 <= gain_1h < 0.2:
         score += 4
-    elif 8 < gain_1h <= 12:
-        score += 1
-
-    if 0.05 <= efficiency <= 1.25:
-        score += 6
-    elif efficiency <= 2:
-        score += 2
-    elif efficiency > 3:
-        score -= 5
 
     if trend_strong:
         score += 7
     elif trend_bullish:
         score += 4
-    elif ema9 is not None and ema21 is not None and ema9 < ema21:
-        score -= 3
 
-    if ema9_slope_15m > 0.3 and ema21_slope_1h > 0.5:
-        score += 4
-    elif ema9_slope_15m < -0.5 or ema21_slope_1h < -1.0:
-        score -= 4
+    if funding_rate < -0.0004:
+        score += 8
 
-    if buy_pressure_15m >= 0.62 and buy_pressure_delta >= 0.02:
-        score += 7
-    elif buy_pressure_15m >= 0.56:
-        score += 4
+    if buy_pressure_15m >= 0.52:
+        score += 6
     elif buy_pressure_15m < 0.45:
         score -= 6
 
     score += trend_cont
 
-    if -1.0 <= breakout_pct <= 1.5:
+    if -2.5 <= breakout_pct <= 2.5:
         score += 5
-    elif 1.5 < breakout_pct <= 3:
-        score += 2
     elif breakout_pct > 4:
-        score -= 4
-    elif breakout_pct < -3:
-        score -= 2
-
-    if upper_wick_ratio > 0.35 and body_pct < 0.5:
-        score -= 5
-    elif close_location >= 0.75 and body_pct > 0:
-        score += 3
-
-    if rsi14 is not None:
-        if 50 <= rsi14 <= 68:
-            score += 4
-        elif 68 < rsi14 <= 76:
-            score += 2
-        elif rsi14 > 82:
-            score -= 8
-        elif rsi14 < 42:
-            score -= 4
-
-    if atr14_pct is not None:
-        if 0.4 <= atr14_pct <= 5:
-            score += 2
-        elif atr14_pct > 8:
-            score -= 3
-
-    if 0 <= gain_24h <= 8:
-        score += 4
-    elif gain_24h < 0:
-        score += 2
-    elif gain_24h <= 14:
-        score += 1
-    elif gain_24h > 20:
         score -= 3
 
-    if qv24 >= 20_000_000:
+    if rsi14 is not None:
+        if 45 <= rsi14 <= 78:
+            score += 5
+        elif rsi14 > 85:
+            score -= 8
+
+    if 0 <= gain_24h <= 60:
+        score += 4
+    elif gain_24h > 75:
+        score -= 4
+
+    if qv24 >= 10_000_000:
         liquidity = "HIGH"; score += 4
-    elif qv24 >= 10_000_000:
-        liquidity = "GOOD"; score += 3
     elif qv24 >= 5_000_000:
+        liquidity = "GOOD"; score += 3
+    elif qv24 >= 2_000_000:
         liquidity = "MEDIUM"; score += 1
     else:
         liquidity = "LOW"
-
-    if gain_15m > 7 or gain_1h > 10:
-        score -= 8
-    if gain_15m > 8.5 and gain_1h > 12:
-        score -= 10
 
     if is_wash:
         score -= 25
@@ -970,20 +895,12 @@ def analyze(symbol, ticker):
     # ---------- SETUP ----------
     if is_wash:
         setup = "SUSPECT WASH"
-    elif (volume_ratio_15m >= 5 and volume_ratio_1h >= 2 and 1.3 <= acceleration <= 4.0
-          and 0.5 <= gain_15m <= 6 and gain_1h <= 8
-          and buy_pressure_15m >= 0.54 and trend_cont >= 3
-          and (rsi14 is None or rsi14 < 78)):
+    elif volume_ratio_15m >= 2.5 and gain_15m >= 0.6:
         setup = "SMART EARLY PUMP"
-    elif (breakout_pct >= -1 and volume_ratio_1h >= 2
-          and 1.3 <= acceleration <= 4.0 and gain_15m <= 6):
+    elif breakout_pct >= -1.5 and volume_ratio_1h >= 1.5:
         setup = "BREAKOUT + VOLUME ACCELERATION"
-    elif volume_ratio_1h >= 3 and volume_persistence >= 2:
-        setup = "VOLUME EXPANSION"
-    elif breakout_pct >= 0:
-        setup = "BREAKOUT"
     else:
-        setup = "EARLY MOMENTUM"
+        setup = "FLEXIBLE MOMENTUM"
 
     explosive_probe = {
         "symbol": symbol, "5m": gain_5m, "15m": gain_15m, "1h": gain_1h,
@@ -1003,16 +920,12 @@ def analyze(symbol, ticker):
         setup = "SHORT SQUEEZE"
 
     price_confirmation = (
-        (gain_15m >= 1.0 and gain_5m >= 0.3)
-        or (gain_1h >= 2.0 and gain_5m >= 0.2)
-        or (breakout_pct >= 0.0 and close_location >= 0.90
-            and volume_ratio_1h >= 4.0 and gain_15m >= 0.6)
+        (gain_15m >= 0.5 and gain_5m >= 0.15)
+        or (gain_1h >= 1.0 and gain_5m >= 0.1)
     )
     continuation_quality = (
-        buy_pressure_15m >= 0.52
-        and (rsi14 is None or rsi14 < 80)
-        and upper_wick_ratio < 0.50
-        and not (gain_15m > 8 and gain_1h > 12)
+        buy_pressure_15m >= 0.50
+        and (rsi14 is None or rsi14 < 82)
         and not is_wash
     )
 
@@ -1056,7 +969,7 @@ def analyze(symbol, ticker):
 
 
 # ============================================================
-# Gates
+# Gates (تم تخفيفها لتقليل نسب الرفض المتأخر)
 # ============================================================
 
 def persistent_explosion_gate(x):
@@ -1092,7 +1005,7 @@ def reversal_explosion_gate(x):
     return bool(
         x.get("5m", -999) >= REVERSAL_MIN_5M_MOVE
         and x.get("15m", -999) >= REVERSAL_MIN_15M_MOVE
-        and x.get("1h", 999) <= 1.0
+        and x.get("1h", 999) <= 3.0
         and x.get("volume_15m", 0) >= REVERSAL_MIN_VOLUME_15M
         and x.get("volume_1h", 0) >= REVERSAL_MIN_VOLUME_1H
         and x.get("buy_pressure", 0) >= REVERSAL_MIN_BUY_PRESSURE
@@ -1102,7 +1015,7 @@ def reversal_explosion_gate(x):
         and x.get("24h", 999) <= REVERSAL_MAX_24H_GAIN
         and x.get("green_streak", 0) >= REVERSAL_MIN_GREEN_STREAK
         and x.get("trend_continuity", 0) >= REVERSAL_MIN_TREND_CONTINUITY
-        and x.get("quote_volume", 0) >= REVERSAL_MIN_24H_VOLUME
+        and x.get("quote_volume", 0) >= MIN_24H_QUOTE_VOLUME
     )
 
 
@@ -1126,98 +1039,57 @@ def squeeze_gate(x):
 def explosive_early_gate(x):
     sym = x.get("symbol", "")
     base = sym[:-4] if sym.endswith("USDT") else sym
-    if base in STABLE_BASES:
-        return False
-    if x.get("is_wash"):
+    if base in STABLE_BASES or x.get("is_wash"):
         return False
 
     v15 = x.get("volume_15m", 0)
     accel = x.get("acceleration", 0)
     rsi = x.get("rsi14")
 
-    if v15 > EXPLOSIVE_MAX_VOLUME_15M:
-        return False
-    if accel > EXPLOSIVE_MAX_ACCELERATION:
-        return False
-    if rsi is None or rsi >= EXPLOSIVE_MAX_RSI:
+    if v15 > EXPLOSIVE_MAX_VOLUME_15M or accel > EXPLOSIVE_MAX_ACCELERATION or rsi is None or rsi >= EXPLOSIVE_MAX_RSI:
         return False
 
-    price_impulse = (
+    return bool(
         x.get("5m", -999) >= EXPLOSIVE_MIN_5M_MOVE
         and x.get("15m", -999) >= EXPLOSIVE_MIN_15M_MOVE
-    )
-    acceleration_ok = (
-        v15 >= EXPLOSIVE_MIN_VOLUME_15M
+        and v15 >= EXPLOSIVE_MIN_VOLUME_15M
         and x.get("volume_1h", 0) >= EXPLOSIVE_MIN_VOLUME_1H
         and accel >= EXPLOSIVE_MIN_ACCELERATION
-    )
-    structure_ok = (
-        x.get("buy_pressure", 0) >= EXPLOSIVE_MIN_BUY_PRESSURE
+        and x.get("buy_pressure", 0) >= EXPLOSIVE_MIN_BUY_PRESSURE
         and x.get("upper_wick_ratio", 1.0) < EXPLOSIVE_MAX_UPPER_WICK
         and x.get("breakout", -999) >= EXPLOSIVE_MIN_BREAKOUT
-    )
-    early_ok = (
-        x.get("24h", 999) <= EXPLOSIVE_MAX_24H_GAIN
+        and x.get("24h", 999) <= EXPLOSIVE_MAX_24H_GAIN
         and x.get("1h", 999) <= EXPLOSIVE_MAX_1H_GAIN
-        and x.get("15m", 999) <= 4.0
-    )
-    trend_ok = (
-        x.get("green_streak", 0) >= EXPLOSIVE_MIN_GREEN_STREAK
+        and x.get("green_streak", 0) >= EXPLOSIVE_MIN_GREEN_STREAK
         and x.get("trend_continuity", 0) >= EXPLOSIVE_MIN_TREND_CONTINUITY
+        and x.get("quote_volume", 0) >= EXPLOSIVE_MIN_24H_VOLUME
     )
-    liquidity_ok = x.get("quote_volume", 0) >= EXPLOSIVE_MIN_24H_VOLUME
-
-    return bool(price_impulse and acceleration_ok and structure_ok
-                and early_ok and trend_ok and liquidity_ok)
 
 
 def strict_pump_gate(x):
     sym = x.get("symbol", "")
     base = sym[:-4] if sym.endswith("USDT") else sym
-    if base in STABLE_BASES:
-        return False
-    if x.get("is_wash"):
+    if base in STABLE_BASES or x.get("is_wash"):
         return False
 
     v15 = x.get("volume_15m", 0)
     accel = x.get("acceleration", 0)
     rsi = x.get("rsi14")
 
-    if v15 > WASH_VOL_15M_HARD_CAP:
-        return False
-    if accel > FINAL_MAX_ACCELERATION:
-        return False
-    if rsi is None or rsi >= FINAL_MAX_RSI:
-        return False
-    if x.get("buy_pressure", 0) < FINAL_MIN_BUY_PRESSURE:
-        return False
-    if x.get("green_streak", 0) < FINAL_MIN_GREEN_STREAK:
-        return False
-    if x.get("trend_continuity", 0) < FINAL_MIN_TREND_CONTINUITY:
+    if v15 > WASH_VOL_15M_HARD_CAP or accel > FINAL_MAX_ACCELERATION or rsi is None or rsi >= FINAL_MAX_RSI:
         return False
 
-    price_ok = (
+    return bool(
         x.get("15m", -999) >= FINAL_MIN_15M_MOVE
-        and (x.get("5m", -999) >= FINAL_MIN_5M_MOVE
-             or x.get("breakout", -999) >= 0.0)
-    )
-    volume_ok = (
-        x.get("volume_1h", 0) >= FINAL_MIN_VOLUME_1H
-        and x.get("volume_15m", 0) >= FINAL_MIN_VOLUME_15M
+        and (x.get("5m", -999) >= FINAL_MIN_5M_MOVE or x.get("breakout", -999) >= 0.0)
+        and x.get("volume_1h", 0) >= FINAL_MIN_VOLUME_1H
+        and v15 >= FINAL_MIN_VOLUME_15M
         and accel >= FINAL_MIN_ACCELERATION
+        and x.get("buy_pressure", 0) >= FINAL_MIN_BUY_PRESSURE
+        and x.get("green_streak", 0) >= FINAL_MIN_GREEN_STREAK
+        and x.get("trend_continuity", 0) >= FINAL_MIN_TREND_CONTINUITY
+        and x.get("quote_volume", 0) >= FINAL_MIN_24H_VOLUME
     )
-    structure_ok = (
-        x.get("upper_wick_ratio", 1.0) < 0.45
-        and x.get("breakout", -999) >= -0.75
-    )
-    not_late = (
-        x.get("24h", 999) <= FINAL_MAX_24H_GAIN
-        and x.get("15m", 999) <= 6.0
-        and x.get("1h", 999) <= 10.0
-    )
-    liquidity_ok = x.get("quote_volume", 0) >= FINAL_MIN_24H_VOLUME
-
-    return bool(price_ok and volume_ok and structure_ok and not_late and liquidity_ok)
 
 
 def has_price_confirmation(x):
@@ -1227,28 +1099,14 @@ def has_price_confirmation(x):
 
 
 def final_candidate_eligible(x):
-    # 1) المسار العام
     if x.get("score", 0) >= FINAL_SCORE and has_price_confirmation(x):
         return True
-
-    # 2) PERSISTENT مستقل
-    if (x.get("score", 0) >= PERSISTENT_FINAL_SCORE
-        and x.get("continuation_quality")
-        and persistent_explosion_gate(x)):
+    if x.get("score", 0) >= PERSISTENT_FINAL_SCORE and x.get("continuation_quality") and persistent_explosion_gate(x):
         return True
-
-    # 3) REVERSAL مستقل
-    if (x.get("score", 0) >= REVERSAL_FINAL_SCORE
-        and x.get("continuation_quality")
-        and reversal_explosion_gate(x)):
+    if x.get("score", 0) >= REVERSAL_FINAL_SCORE and x.get("continuation_quality") and reversal_explosion_gate(x):
         return True
-
-    # 4) SQUEEZE مستقل
-    if (x.get("score", 0) >= SQUEEZE_FINAL_SCORE
-        and x.get("continuation_quality")
-        and squeeze_gate(x)):
+    if x.get("score", 0) >= SQUEEZE_FINAL_SCORE and x.get("continuation_quality") and squeeze_gate(x):
         return True
-
     return False
 
 
@@ -1385,7 +1243,7 @@ def compressed_gate(x):
         and rsi is not None
         and COMPRESSED_MIN_RSI <= rsi <= COMPRESSED_MAX_RSI
         and x.get("buy_pressure", 0) >= COMPRESSED_MIN_BUY_PRESSURE
-        and x.get("quote_volume", 0) >= COMPRESSED_MIN_LIQUIDITY_VOL
+        and x.get("quote_volume", 0) >= MIN_24H_QUOTE_VOLUME
     )
 
 
@@ -1396,7 +1254,7 @@ def format_compressed(x):
 
 COIN: {x['symbol']}
 الفكرة (باك-تيست 30 يوم): العملات اللي بتقفز بتكون أبعد تحت قمتها
-من المعتاد (-11% vs -7%) مع انحراف 4h موجب بسيط وحجم بدأ يصعد.
+من المعتاد (-11% vs -7%) مع انحراف 4h موجب بسيط والحجم بدأ يصعد.
 
 Price: {x['price']:.10g}
 4h:  {x.get('4h', 0):+.2f}%
@@ -1424,9 +1282,6 @@ def maybe_compressed_alert(x, now):
     for s in [s for s, t in compressed_alerted.items() if t < cutoff]:
         compressed_alerted.pop(s, None)
     log_early_watch(x, now)
-    # Telegram DISABLED — log only (user request)
-    # msg = format_compressed(x)
-    # telegram_send(msg)
     log.info(f"🧨 COMPRESSED (no telegram): {sym} breakout={x['breakout']:+.2f}% 4h={x.get('4h', 0):+.2f}%")
     return True
 
@@ -1954,17 +1809,6 @@ def maybe_final_signal(x, now):
     if not final_candidate_eligible(x):
         return False
 
-    first = c["first"]
-    second_confirmed = (
-        x.get("continuation_quality", False)
-        and x["5m"] > -0.3
-        and x["15m"] >= first["15m"] - 1.0
-        and x["volume_1h"] >= first["volume_1h"] * 0.70
-    )
-
-    if not second_confirmed:
-        return False
-
     final_x = x if x["score"] >= c["best"]["score"] else c["best"]
 
     cross_label, cross_detail = cross_exchange_confirmation(sym)
@@ -2074,7 +1918,7 @@ def run_cycle(symbols):
             universe.append(symbol)
 
     results = []
-    with ThreadPoolExecutor(max_workers=10) as ex:
+    with ThreadPoolExecutor(max_workers=20) as ex:
         futures = {ex.submit(analyze, symbol, tickers[symbol]): symbol for symbol in universe}
         for fut in as_completed(futures):
             symbol = futures[fut]
