@@ -1,7 +1,14 @@
 # ============================================================
-# BINANCE EARLY-PUMP SCANNER V4.4  (دمج v3/V4.3 + scanner_v4 + تعلّم ذاتي)
+# BINANCE EARLY-PUMP SCANNER V4.4.1
 # ============================================================
 # القاعدة: scanner_v4 (أدق في الـscore والـgates) + إصلاح أخطاء النسخة المنشورة.
+# V4.4.1 (إصلاح عطل كامل):
+#  [إصلاح] TypeError: Invalid value 'SL' for dtype 'float64' — كان بيوقف
+#    الدورة كلها. السبب: أعمدة outcome/lane الفاضية بتتقرا float64 وبانداس
+#    بيرفض الكتابة النصية فيها. دلوقتي بنقرأها object.
+#  [إصلاح] save_track لو فشل لإشارة واحدة مبقاش يقتل الدورة (try/except).
+#  [إصلاح] إشعار TP1/SL مبقاش بيتخطى لو سعر التيكر ناقص مؤقتًا.
+#  [إصلاح] COMPRESSED check بيمشي على كل النتائج مش أول 30 بس.
 # V4.4:
 #  [إصلاح] NameError في compressed_gate (كان بيوقف دورات المسح فعليًا)
 #  [إصلاح] TRACK_FILE كان بيتمسح بعد 4 أيام -> بيضيّع بيانات التعلم الذاتي
@@ -1789,6 +1796,19 @@ TRACK_COLUMNS = [
     "lane", "outcome", "exit_pct", "outcome_min",
 ]
 
+# أعمدة نصية لازم تقرا object — لو فاضية بانداس بيحوّلها float64
+# وبيرفض الكتابة النصية فيها (Invalid value 'SL' for dtype 'float64')
+TRACK_STR_COLUMNS = ("final_time_utc", "symbol", "setup", "liquidity",
+                     "status", "lane", "outcome")
+
+
+def read_track_file():
+    df = pd.read_csv(TRACK_FILE, low_memory=False)
+    for c in TRACK_STR_COLUMNS:
+        if c in df.columns:
+            df[c] = df[c].astype(object)
+    return df
+
 
 def init_results_file():
     columns = TRACK_COLUMNS
@@ -1841,6 +1861,14 @@ def init_results_file():
             log.warning(f"watch log schema check failed: {e}")
 
 
+def safe_save_track(track):
+    """save_track مع عزل الأعطال — عطل إشارة واحدة مبيموتش الدورة."""
+    try:
+        save_track(track)
+    except Exception as e:
+        log.error(f"save_track failed for {track.get('symbol')}: {e}")
+
+
 def save_track(track):
     row = {
         "final_time_utc": track["final_time_utc"],
@@ -1880,7 +1908,7 @@ def save_track(track):
     columns = list(row.keys())
     try:
         if os.path.exists(TRACK_FILE) and os.path.getsize(TRACK_FILE) > 0:
-            df = pd.read_csv(TRACK_FILE, dtype={"symbol": str, "final_time_utc": str})
+            df = read_track_file()
             for col in columns:
                 if col not in df.columns:
                     df[col] = ""
@@ -1986,14 +2014,15 @@ def update_tracking(tickers):
 
         price = tickers.get(symbol, {}).get("price")
         if price is None or price <= 0:
+            notify_outcome(track)
             if elapsed_min > MAX_AGE_MIN:
                 if track.get("outcome") is None:
                     track["outcome"], track["exit_pct"] = "TIMEOUT", track.get("mae_pct", 0.0)
                 track["status"] = "COMPLETED"
-                save_track(track)
+                safe_save_track(track)
                 del active_tracks[symbol]
             elif changed:
-                save_track(track)
+                safe_save_track(track)
             continue
 
         track["peak_price"] = max(track["peak_price"], price)
@@ -2014,12 +2043,12 @@ def update_tracking(tickers):
 
         if changed:
             track["status"] = "TRACKING"
-            save_track(track)
+            safe_save_track(track)
         notify_outcome(track)
 
         if elapsed_min >= 1440:
             track["status"] = "COMPLETED"
-            save_track(track)
+            safe_save_track(track)
             del active_tracks[symbol]
 
 
@@ -2085,7 +2114,7 @@ def start_final_tracking(x):
         "last_k_ms": None,
         "notified": False,
     }
-    save_track(active_tracks[x["symbol"]])
+    safe_save_track(active_tracks[x["symbol"]])
 
 
 # ============================================================
@@ -2330,6 +2359,11 @@ def run_cycle(symbols):
             log_early_watch(x, now)
             if final_candidate_eligible(x):
                 maybe_final_signal(x, now)
+            if compressed_gate(x):
+                maybe_compressed_alert(x, now)
+
+        # V4.4.1: فحص COMPRESSED لكل النتائج مش أول MAX_PROCESS_PER_CYCLE بس
+        for x in results[MAX_PROCESS_PER_CYCLE:]:
             if compressed_gate(x):
                 maybe_compressed_alert(x, now)
 
