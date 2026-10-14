@@ -5,8 +5,7 @@ on:
   # (الـ schedule الداخلي اتشال لأنه بيتأخر 15-60+ دقيقة وقت الزحام)
   workflow_dispatch: {}
 
-# مهم: يمنع تشغيلتين بالتوازي — ده كان بيعمل تعارض git push ويرجع
-# الـ state لورا ويكرر صفوف التتبع مئات المرات
+# مهم: يمنع تشغيلتين بالتوازي — ده كان بيعمل تعارض git push ويرجّع الـ state لورا
 concurrency:
   group: scanner-v4
   cancel-in-progress: false
@@ -38,17 +37,30 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # فلتر الحلال شغّال افتراضيًا. لإيقافه غيّر القيمة لـ 0
+          SHARIAH_FILTER: "1"
+          # التعلّم الذاتي (قراءة العتبات من state/auto_thresholds.json). لإيقافه: 0
+          AUTO_LEARN: "1"
         run: python binance_early_pump_v4.py --once
+
+      - name: Self-learning evaluation
+        # بيشتغل بعد المسح عشان يشوف آخر النتايج. مش بيعدّل حاجة إلا كل 10 إشارات جديدة.
+        # فشله ما يوقفش الـ workflow.
+        if: always()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python self_learn.py || true
 
       - name: Save state and results back to the repo
         if: always()
         run: |
           git config user.name "scanner-bot"
           git config user.email "scanner-bot@users.noreply.github.com"
-          # سحب آخر حالة قبل الدفع عشان مانضيعش commits من تشغيلات تانية
-          git pull --rebase origin ${{ github.ref_name }} || true
           git add scanner_state.json early_pump_signal_results.csv \
                   early_watch_log.csv early_scan_diagnostics.csv \
-                  shariah_compliant_bases.json 2>/dev/null || true
+                  shariah_compliant_bases.json state 2>/dev/null || true
+          # الأول commit وبعدين rebase: (pull --rebase مع تعديلات غير مُحتفَظ بيها كان بيفشل بصمت)
           git diff --cached --quiet || git commit -m "Update scanner state [skip ci]"
+          git pull --rebase origin ${{ github.ref_name }} || true
           git push || true
