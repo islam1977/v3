@@ -1,7 +1,18 @@
 # ============================================================
-# BINANCE EARLY-PUMP SCANNER V4.3 — دمج V4.1 + ميزات V4.2
+# BINANCE EARLY-PUMP SCANNER V4.4  (دمج v3/V4.3 + scanner_v4 + تعلّم ذاتي)
 # ============================================================
-# V4.3 (2026-10-11) — دمج كامل + تعديلات المرونة لاغتنام الفرص
+# القاعدة: scanner_v4 (أدق في الـscore والـgates) + إصلاح أخطاء النسخة المنشورة.
+# V4.4:
+#  [إصلاح] NameError في compressed_gate (كان بيوقف دورات المسح فعليًا)
+#  [إصلاح] TRACK_FILE كان بيتمسح بعد 4 أيام -> بيضيّع بيانات التعلم الذاتي
+#  [إصلاح] cleanup كان بيحلل 170k+ timestamp في كل دورة (بطيء) -> مقارنة نصية + كل 6 ساعات
+#  [إصلاح] التتبع كان بيمشي ويشتغل بس لو BTC آمن -> بقى بيتحدّث دايمًا
+#  [إصلاح] سعر الدخول كان ممكن يبقى قديم (best من مسح سابق) -> سعر لحظي
+#  [جديد ] تتبع النتيجة بمسار شموع 1m: أي واحد اتحقق الأول TP1 ولا SL (outcome / exit_pct)
+#  [جديد ] lane لكل إشارة (STRICT/EXPLOSIVE/PERSISTENT/REVERSAL/SQUEEZE) للتعلّم الذاتي
+#  [جديد ] إشعار تيليجرام لما إشارة تحقق TP1 أو SL
+#  [جديد ] فلتر الحلال شغّال افتراضيًا (SHARIAH_FILTER=0 لإيقافه)
+#  [جديد ] Funding fallback (Bybit) + تقليل حجم early_scan_diagnostics.csv
 # ============================================================
 
 import requests, time, math, csv, os, json, sys, logging, re, html
@@ -29,96 +40,98 @@ FUTURES_BASE_URL = "https://fapi.binance.com"
 STATE_FILE = "scanner_state.json"
 INTERVAL = "5m"
 KLINES_LIMIT = 180
+MAX_WORKERS = 16
+MAX_PROCESS_PER_CYCLE = 30
 
-# ---------- Scan (تم توسيع السقف ومرونة النطاق) ----------
+# ---------- Scan ----------
 SCAN_EVERY_SECONDS = 300
 MIN_24H_QUOTE_VOLUME = 2_000_000
-MAX_24H_GAIN_PCT = 80.0
-MIN_15M_GAIN = -4.0
-MAX_15M_GAIN = 15.0
-MIN_1H_GAIN = -15.0
-MAX_1H_GAIN = 25.0
+MAX_24H_GAIN_PCT = 50.0
+MIN_15M_GAIN = -3.0
+MAX_15M_GAIN = 12.0
+MIN_1H_GAIN = -12.0
+MAX_1H_GAIN = 20.0
 
 # ---------- BTC Market Guard ----------
-BTC_CRASH_THRESHOLD_15M = -1.5
-BTC_CRASH_THRESHOLD_1H = -3.0
+BTC_CRASH_THRESHOLD_15M = -1.2
+BTC_CRASH_THRESHOLD_1H = -2.5
 
-# ---------- Wash Trading Detector (تخفيف الحساسية لمنع استبعاد المشاريع الكبرى) ----------
+# ---------- Wash Trading Detector ----------
 WASH_MAX_PRICE_MOVE_FOR_BIG_VOL = 0.5
-WASH_ACCEL_THRESHOLD = 7.0
-WASH_VOL_1H_THRESHOLD = 8.0
-WASH_VOL_15M_HARD_CAP = 20.0
+WASH_ACCEL_THRESHOLD = 5.0
+WASH_VOL_1H_THRESHOLD = 6.0
+WASH_VOL_15M_HARD_CAP = 18.0
 
-# ---------- FINAL gate (تخفيف الشروط للسرعة) ----------
-FINAL_MIN_15M_MOVE = 1.0
-FINAL_MIN_5M_MOVE = 0.20
-FINAL_MIN_VOLUME_15M = 3.0
-FINAL_MIN_VOLUME_1H = 1.8
-FINAL_MIN_ACCELERATION = 1.1
-FINAL_MAX_ACCELERATION = 5.0
+# ---------- FINAL gate ----------
+FINAL_MIN_15M_MOVE = 1.25
+FINAL_MIN_5M_MOVE = 0.25
+FINAL_MIN_VOLUME_15M = 4.0
+FINAL_MIN_VOLUME_1H = 2.0
+FINAL_MIN_ACCELERATION = 1.2
+FINAL_MAX_ACCELERATION = 4.5
 FINAL_MIN_24H_VOLUME = 2_000_000
-FINAL_MAX_24H_GAIN = 40.0
-FINAL_MAX_RSI = 80.0
-FINAL_MIN_BUY_PRESSURE = 0.52
+FINAL_MAX_24H_GAIN = 22.0
+FINAL_MAX_RSI = 78.0
+FINAL_MIN_BUY_PRESSURE = 0.55
 FINAL_MIN_GREEN_STREAK = 2
-FINAL_MIN_TREND_CONTINUITY = 2
+FINAL_MIN_TREND_CONTINUITY = 3
 
 # ---------- EXPLOSIVE EARLY ----------
-EXPLOSIVE_MIN_5M_MOVE = 0.8
-EXPLOSIVE_MIN_15M_MOVE = 0.7
-EXPLOSIVE_MIN_VOLUME_15M = 3.0
-EXPLOSIVE_MAX_VOLUME_15M = 15.0
-EXPLOSIVE_MIN_VOLUME_1H = 1.8
-EXPLOSIVE_MIN_ACCELERATION = 1.3
-EXPLOSIVE_MAX_ACCELERATION = 4.5
-EXPLOSIVE_MIN_BUY_PRESSURE = 0.54
+EXPLOSIVE_MIN_5M_MOVE = 1.0
+EXPLOSIVE_MIN_15M_MOVE = 0.8
+EXPLOSIVE_MIN_VOLUME_15M = 4.0
+EXPLOSIVE_MAX_VOLUME_15M = 12.0
+EXPLOSIVE_MIN_VOLUME_1H = 2.0
+EXPLOSIVE_MIN_ACCELERATION = 1.5
+EXPLOSIVE_MAX_ACCELERATION = 4.0
+EXPLOSIVE_MIN_BUY_PRESSURE = 0.58
 EXPLOSIVE_MIN_24H_VOLUME = 2_000_000
-EXPLOSIVE_MAX_24H_GAIN = 45.0
-EXPLOSIVE_MAX_1H_GAIN = 15.0
-EXPLOSIVE_MAX_RSI = 78.0
-EXPLOSIVE_MAX_UPPER_WICK = 0.45
-EXPLOSIVE_MIN_BREAKOUT = -2.00
-EXPLOSIVE_MIN_GREEN_STREAK = 2
-EXPLOSIVE_MIN_TREND_CONTINUITY = 2
+EXPLOSIVE_MAX_24H_GAIN = 25.0
+EXPLOSIVE_MAX_1H_GAIN = 10.0
+EXPLOSIVE_MAX_RSI = 76.0
+EXPLOSIVE_MAX_UPPER_WICK = 0.40
+EXPLOSIVE_MIN_BREAKOUT = -1.50
+EXPLOSIVE_MIN_GREEN_STREAK = 3
+EXPLOSIVE_MIN_TREND_CONTINUITY = 4
 
 # ---------- Persistent lane ----------
-PERSISTENT_FINAL_SCORE = 65
-PERSISTENT_MIN_5M_MOVE = 0.50
-PERSISTENT_MIN_15M_MOVE = 1.00
-PERSISTENT_MIN_VOLUME_15M = 2.20
-PERSISTENT_MIN_VOLUME_1H = 1.40
-PERSISTENT_MIN_PERSISTENCE = 1.80
-PERSISTENT_MIN_BUY_PRESSURE = 0.52
-PERSISTENT_MAX_1H_GAIN = 22.0
-PERSISTENT_MAX_24H_GAIN = 45.0
-PERSISTENT_MAX_RSI = 82.0
-PERSISTENT_MAX_UPPER_WICK = 0.50
-PERSISTENT_MIN_BREAKOUT = -1.50
+PERSISTENT_FINAL_SCORE = 70
+PERSISTENT_MIN_5M_MOVE = 0.70
+PERSISTENT_MIN_15M_MOVE = 1.25
+PERSISTENT_MIN_VOLUME_15M = 2.50
+PERSISTENT_MIN_VOLUME_1H = 1.50
+PERSISTENT_MIN_PERSISTENCE = 2.00
+PERSISTENT_MIN_BUY_PRESSURE = 0.54
+PERSISTENT_MAX_1H_GAIN = 18.0
+PERSISTENT_MAX_24H_GAIN = 30.0
+PERSISTENT_MAX_RSI = 80.0
+PERSISTENT_MAX_UPPER_WICK = 0.45
+PERSISTENT_MIN_BREAKOUT = -1.25
 PERSISTENT_MIN_GREEN_STREAK = 2
-PERSISTENT_MIN_TREND_CONTINUITY = 2
+PERSISTENT_MIN_TREND_CONTINUITY = 3
 
 # ---------- Reversal lane ----------
-REVERSAL_FINAL_SCORE = 68
-REVERSAL_MIN_5M_MOVE = 0.40
-REVERSAL_MIN_15M_MOVE = 1.00
-REVERSAL_MIN_VOLUME_15M = 2.50
-REVERSAL_MIN_VOLUME_1H = 1.50
-REVERSAL_MIN_BUY_PRESSURE = 0.52
+REVERSAL_FINAL_SCORE = 72
+REVERSAL_MIN_5M_MOVE = 0.50
+REVERSAL_MIN_15M_MOVE = 1.25
+REVERSAL_MIN_VOLUME_15M = 3.00
+REVERSAL_MIN_VOLUME_1H = 1.70
+REVERSAL_MIN_BUY_PRESSURE = 0.54
 REVERSAL_MIN_24H_VOLUME = 2_000_000
-REVERSAL_MAX_24H_GAIN = 35.0
-REVERSAL_MAX_RSI = 80.0
-REVERSAL_MAX_UPPER_WICK = 0.50
-REVERSAL_MIN_BREAKOUT = -2.00
+REVERSAL_MAX_24H_GAIN = 22.0
+REVERSAL_MAX_RSI = 78.0
+REVERSAL_MAX_UPPER_WICK = 0.45
+REVERSAL_MIN_BREAKOUT = -1.50
 REVERSAL_MIN_GREEN_STREAK = 2
-REVERSAL_MIN_TREND_CONTINUITY = 2
+REVERSAL_MIN_TREND_CONTINUITY = 3
 
 # ---------- Short Squeeze lane ----------
-SQUEEZE_FINAL_SCORE = 65
-SQUEEZE_MAX_FUNDING = -0.0004
-SQUEEZE_MIN_15M_MOVE = 0.8
-SQUEEZE_MIN_VOLUME_15M = 2.2
-SQUEEZE_MIN_BUY_PRESSURE = 0.52
-SQUEEZE_MAX_24H_GAIN = 35.0
+SQUEEZE_FINAL_SCORE = 70
+SQUEEZE_MAX_FUNDING = -0.0005
+SQUEEZE_MIN_15M_MOVE = 1.0
+SQUEEZE_MIN_VOLUME_15M = 2.5
+SQUEEZE_MIN_BUY_PRESSURE = 0.55
+SQUEEZE_MAX_24H_GAIN = 20.0
 
 STABLE_BASES = {
     "USDT", "USDC", "FDUSD", "TUSD", "USDP", "DAI",
@@ -134,18 +147,18 @@ RISK_RR_TP1 = 1.5
 RISK_RR_TP2 = 3.0
 RISK_HIGH_ATR_THRESHOLD = 6.0
 RISK_HIGH_ATR_TP1_RR = 1.2
-RISK_HIGH_RSI_THRESHOLD = 78.0
+RISK_HIGH_RSI_THRESHOLD = 76.0
 RISK_HIGH_RSI_TP1_RR = 1.0
 RISK_LOW_LIQ_TP1_RR = 1.0
 
-# ---------- Scores (تخفيض العتبة بناءً على تحليل اللوجات) ----------
-WATCH_SCORE = 60
-FINAL_SCORE = 75
+# ---------- Scores ----------
+WATCH_SCORE = 65
+FINAL_SCORE = 80
 EXCEPTIONAL_SCORE = 88
 CONFIRMATIONS_REQUIRED = 2
 CANDIDATE_EXPIRY_MINUTES = 45
 FINAL_COOLDOWN_HOURS = 12
-MIN_CANDIDATE_SCORE = 62
+MIN_CANDIDATE_SCORE = 68
 
 # ---------- Cross-Exchange ----------
 BYBIT_BASE = "https://api.bybit.com"
@@ -158,27 +171,31 @@ CROSS_CACHE_TTL_SECONDS = 300
 SCAN_DIAGNOSTICS_FILE = "early_scan_diagnostics.csv"
 
 # ---------- OKX Lead Watcher ----------
-OKX_LEAD_MIN_1H_CHG = 2.0
-OKX_LEAD_MIN_4H_CHG = 4.0
-OKX_LEAD_MIN_PREMIUM = 0.8
-OKX_LEAD_MAX_24H_GAIN = 30.0
+OKX_LEAD_MIN_1H_CHG = 2.5
+OKX_LEAD_MIN_4H_CHG = 5.0
+OKX_LEAD_MIN_PREMIUM = 1.0
+OKX_LEAD_MAX_24H_GAIN = 20.0
 OKX_LEAD_MIN_24H_VOLUME = 2_000_000
 OKX_LEAD_COOLDOWN_HOURS = 4
 
 # ---------- Pre-Pump Compressed ----------
 COMPRESSED_MAX_BREAKOUT = -6.0
-COMPRESSED_MIN_GAIN_4H = 0.20
-COMPRESSED_MAX_GAIN_4H = 3.5
-COMPRESSED_MIN_VOL_1H = 1.3
-COMPRESSED_MIN_VOL_15M = 1.1
-COMPRESSED_MAX_15M_GAIN = 3.0
-COMPRESSED_MAX_24H_GAIN = 30.0
-COMPRESSED_MAX_RSI = 58.0
+COMPRESSED_MIN_GAIN_4H = 0.25
+COMPRESSED_MAX_GAIN_4H = 3.0
+COMPRESSED_MIN_VOL_1H = 1.4
+COMPRESSED_MIN_VOL_15M = 1.2
+COMPRESSED_MAX_15M_GAIN = 2.5
+COMPRESSED_MAX_24H_GAIN = 20.0
+COMPRESSED_MAX_RSI = 55.0
 COMPRESSED_COOLDOWN_HOURS = 4
 
 # ---------- Tracking ----------
 TRACK_MINUTES = [5, 15, 30, 60, 240, 1440]
 TRACK_FILE = "early_pump_signal_results.csv"
+TRADE_TIMEOUT_MIN = 240      # لو لا TP1 ولا SL خلال 4 ساعات -> TIMEOUT (خروج بالسعر وقتها)
+NOTIFY_OUTCOMES = True       # تيليجرام لما إشارة تحقق TP1 أو SL
+COMPRESSED_TELEGRAM = False  # إنذار Compressed: تسجيل فقط (زي نسخة v3 الأصلية)
+TRACK_RETENTION_DAYS = 365   # سجل النتائج = بيانات التعلم الذاتي، ماينفعش يتمسح بعد 4 أيام
 EARLY_WATCH_LOG_FILE = "early_watch_log.csv"
 EARLY_WATCH_COOLDOWN_HOURS = 2
 
@@ -195,6 +212,43 @@ SHARIAH_SOURCE_API = "https://gethalalcrypto.com/api/datasets/halal-coins?status
 # ---------- Telegram ----------
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+
+# ---------- Self-learning thresholds (من self_learn.py) ----------
+# قائمة بيضاء: self_learn مسموح له يغيّر الثوابت دي بس (مهما كان محتوى الملف)
+AUTO_TUNABLE = {
+    "FINAL_SCORE", "PERSISTENT_FINAL_SCORE", "REVERSAL_FINAL_SCORE", "SQUEEZE_FINAL_SCORE",
+    "FINAL_MIN_BUY_PRESSURE", "FINAL_MIN_VOLUME_15M", "FINAL_MIN_ACCELERATION",
+    "EXPLOSIVE_MIN_BUY_PRESSURE", "EXPLOSIVE_MIN_ACCELERATION",
+}
+AUTO_LEARN_ENABLED = os.getenv("AUTO_LEARN", "1") != "0"
+
+
+def load_auto_thresholds():
+    """تحميل تعديلات العتبات التي يولدها self_learn.py (state/auto_thresholds.json)."""
+    if not AUTO_LEARN_ENABLED:
+        return
+    path = os.path.join("state", "auto_thresholds.json")
+    if not os.path.exists(path):
+        return
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            overrides = json.load(f)
+        g = globals()
+        applied = []
+        for key, val in overrides.items():
+            if key not in AUTO_TUNABLE or key not in g:
+                continue
+            if not isinstance(val, (int, float)) or isinstance(val, bool) or not math.isfinite(val):
+                continue
+            old = g[key]
+            g[key] = int(round(val)) if isinstance(old, int) else float(val)
+            applied.append(f"{key}: {old} -> {g[key]}")
+        if applied:
+            log.info("Self-learning: " + " | ".join(applied))
+    except Exception as e:
+        log.warning(f"auto thresholds load failed: {e}")
+
+
 PROGRAM_TAG = "🤖 [V4]"
 if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
     log.warning("TELEGRAM_BOT_TOKEN أو TELEGRAM_CHAT_ID غير موجودين — سيعمل بدون إرسال.")
@@ -212,6 +266,8 @@ okx_lead_alerted = {}
 compressed_alerted = {}
 diagnostics_last_logged = {}
 funding_rates_cache = {}
+current_tickers = {}
+meta = {}
 DIAGNOSTIC_COOLDOWN_MINUTES = 15
 SHARIAH_DIAGNOSTIC_COOLDOWN_HOURS = 24
 
@@ -229,6 +285,9 @@ def get_json(path, params=None, retries=3):
                 if r.status_code == 451:
                     last_err = requests.HTTPError(f"451 from {base}", response=r)
                     break
+                if 500 <= r.status_code < 600:
+                    time.sleep(1 + attempt)
+                    continue
                 if r.status_code in (418, 429):
                     wait = 2 ** attempt
                     log.warning(f"Rate limit {r.status_code} من {base} — انتظار {wait}s")
@@ -236,8 +295,6 @@ def get_json(path, params=None, retries=3):
                     continue
                 r.raise_for_status()
                 return r.json()
-            except requests.HTTPError:
-                raise
             except requests.RequestException as e:
                 last_err = e
                 time.sleep(1 + attempt)
@@ -277,26 +334,48 @@ def check_btc_market_health():
         return True, 0.0, 0.0
 
 
+def _add_funding(rates, sym, val):
+    try:
+        v = float(val)
+    except (TypeError, ValueError):
+        return
+    rates[sym] = v
+    if sym.startswith("1000") and len(sym) > 8:      # 1000PEPEUSDT -> PEPEUSDT
+        rates.setdefault(sym[4:], v)
+
+
 def fetch_funding_rates_bulk():
+    """Binance futures أولًا (غالبًا 451 على سيرفرات GitHub الأمريكية) ثم Bybit كبديل."""
     global funding_rates_cache
+    rates = {}
     try:
         r = session.get(f"{FUTURES_BASE_URL}/fapi/v1/premiumIndex", timeout=10)
         r.raise_for_status()
-        data = r.json()
-        rates = {}
-        for x in data:
+        for x in r.json():
             sym = x.get("symbol", "")
             if sym.endswith("USDT"):
-                try:
-                    rates[sym] = float(x.get("lastFundingRate", 0.0))
-                except (TypeError, ValueError):
-                    pass
-        funding_rates_cache = rates
-        log.info(f"Funding rates fetched: {len(rates)} symbols")
-        return rates
+                _add_funding(rates, sym, x.get("lastFundingRate", 0.0))
+        src_name = "Binance"
     except Exception as e:
-        log.warning(f"Funding rates bulk fetch failed: {e}")
-        return funding_rates_cache
+        log.warning(f"Funding (Binance) failed: {e}")
+        src_name = None
+    if not rates:
+        try:
+            r = session.get(f"{BYBIT_BASE}/v5/market/tickers", params={"category": "linear"}, timeout=10)
+            r.raise_for_status()
+            for x in (r.json().get("result", {}) or {}).get("list", []) or []:
+                sym = x.get("symbol", "")
+                if sym.endswith("USDT") and x.get("fundingRate") not in (None, ""):
+                    _add_funding(rates, sym, x.get("fundingRate"))
+            src_name = "Bybit"
+        except Exception as e:
+            log.warning(f"Funding (Bybit) failed: {e}")
+    if rates:
+        funding_rates_cache = rates
+        log.info(f"Funding rates fetched from {src_name}: {len(rates)} symbols")
+    else:
+        log.warning("Funding rates unavailable — Short Squeeze lane معطّلة في هذه الدورة")
+    return funding_rates_cache
 
 
 # ============================================================
@@ -313,6 +392,7 @@ SHARIAH_COMPLIANT_BASES = {
     "ATOM", "FIL", "HNT", "ICP", "XMR", "NEAR", "THETA", "TON",
     "TRX", "SUI", "CTSI", "STRK", "W", "OGN", "MET",
 }
+# User-supplied approved base symbols; values are normalized and deduplicated.
 SHARIAH_USER_APPROVED_BASES = {
     '1000CAT', 'AAVE', 'ACM', 'ADA', 'AGLD', 'ALGO', 'ALICE', 'ANKR',
     'APT', 'AR', 'ARB', 'ARPA', 'ASR', 'ATA', 'ATM', 'ATOM',
@@ -329,14 +409,14 @@ SHARIAH_USER_APPROVED_BASES = {
     'MBL', 'MDT', 'ME', 'MET', 'MINA', 'MTL', 'NEAR', 'NEO',
     'NFP', 'NIL', 'NULS', 'OCEAN', 'OG', 'OGN', 'ONE', 'ONG',
     'ONT', 'OP', 'ORDI', 'OXT', 'PAXG', 'PEPE', 'PHA', 'POND',
-    'PSG', 'PUNSIX', 'QNT', 'QUTM', 'RENDER', 'RIF', 'RLC', 'ROSE',
+    'PSG', 'PUNSIX', 'QNT', 'QTUM', 'RENDER', 'RIF', 'RLC', 'ROSE',
     'RSR', 'RVN', 'S', 'SAND', 'SC', 'SEI', 'SFP', 'SKL',
     'SLP', 'SNX', 'SOL', 'STMX', 'STORJ', 'STPT', 'STRAX', 'STRK',
     'STX', 'SUI', 'SUSHI', 'SXP', 'TFUEL', 'THETA', 'TIA', 'TLM',
     'TRX', 'TWT', 'UTK', 'VET', 'VITE', 'VTHO', 'W', 'WAN',
     'WIF', 'XLM', 'XRP', 'XTZ', 'ZAKI', 'ZEC', 'ZEN', 'ZIL',
 }
-SHARIAH_FILTER_ENABLED = True
+SHARIAH_FILTER_ENABLED = os.getenv("SHARIAH_FILTER", "1") != "0"
 
 
 def _extract_symbols_from_halalcrypto(payload):
@@ -377,6 +457,7 @@ def _extract_symbols_from_crypto_ummmah(text):
 
 
 def load_user_shariah_overrides():
+    """Return deduplicated built-in approvals plus optional local JSON approvals."""
     approved = {str(x).strip().upper() for x in SHARIAH_USER_APPROVED_BASES if str(x).strip()}
     filename = "shariah_user_overrides.json"
     if not os.path.exists(filename):
@@ -625,19 +706,20 @@ def is_likely_wash_trading(x):
     v15 = x.get("volume_15m", 0)
     v1h = x.get("volume_1h", 0)
     accel = x.get("acceleration", 0)
+    g5 = x.get("5m", 0)
     g15 = x.get("15m", 0)
     g1h = x.get("1h", 0)
 
     if v15 > WASH_VOL_15M_HARD_CAP:
-        return True, "vol_15m شاذ (>20x)"
+        return True, "vol_15m شاذ (>18x)"
 
-    if v15 > 12 and abs(g15) < WASH_MAX_PRICE_MOVE_FOR_BIG_VOL:
+    if v15 > 10 and abs(g15) < WASH_MAX_PRICE_MOVE_FOR_BIG_VOL:
         return True, f"vol_15m={v15:.1f}x مع 15m={g15:+.2f}%"
 
-    if accel > WASH_ACCEL_THRESHOLD and abs(g15) < 0.8:
+    if accel > WASH_ACCEL_THRESHOLD and abs(g15) < 1.0:
         return True, f"accel={accel:.1f}x مع 15m={g15:+.2f}%"
 
-    if v1h > WASH_VOL_1H_THRESHOLD and abs(g1h) < 0.8:
+    if v1h > WASH_VOL_1H_THRESHOLD and abs(g1h) < 1.0:
         return True, f"vol_1h={v1h:.1f}x مع 1h={g1h:+.2f}%"
 
     return False, ""
@@ -687,7 +769,7 @@ def compute_risk_levels(entry, atr_val, rsi_val, liquidity):
         "atr_used": atr_use,
         "notes": notes,
     }
-
+    
 
 # ============================================================
 # Analyze
@@ -803,6 +885,7 @@ def analyze(symbol, ticker):
         "1h": gain_1h,
     })
 
+    # Funding rate (V4.3 — من cache)
     funding_rate = funding_rates_cache.get(symbol, 0.0)
 
     volume_persistence = min(volume_ratio_15m, volume_ratio_1h)
@@ -810,82 +893,143 @@ def analyze(symbol, ticker):
     distance_from_1h_high = pct(price, recent_high_1h) if recent_high_1h else 0.0
     efficiency = abs(gain_15m) / max(volume_ratio_15m, 1.0)
 
-    # ---------- SCORE (تم تخفيف الشروط لتسهيل التقاط الفرص المبكرة) ----------
+    # ---------- SCORE ----------
     score = 0
 
-    if volume_ratio_1h >= 4 and gain_15m >= 0.5:
+    if volume_ratio_1h >= 6 and gain_15m >= 1.5:
         score += 16
-    elif volume_ratio_1h >= 3 and gain_15m >= 0.2:
-        score += 10
-    elif volume_ratio_1h >= 2.0:
+    elif volume_ratio_1h >= 6 and gain_15m >= 0.5:
+        score += 8
+    elif volume_ratio_1h >= 4 and gain_15m >= 1.0:
+        score += 12
+    elif volume_ratio_1h >= 4:
+        score += 5
+    elif volume_ratio_1h >= 2.5:
         score += 7
-    elif volume_ratio_1h >= 1.4:
+    elif volume_ratio_1h >= 1.7:
         score += 4
 
-    if volume_ratio_15m >= 4 and gain_15m >= 0.5:
-        score += 12
-    elif volume_ratio_15m >= 2.2:
-        score += 6
-    elif volume_ratio_15m >= 1.5:
+    if volume_ratio_15m >= 10 and gain_15m >= 1.5:
+        score += 10
+    elif volume_ratio_15m >= 6 and gain_15m >= 1.0:
+        score += 8
+    elif volume_ratio_15m >= 3:
+        score += 5
+    elif volume_ratio_15m >= 2:
         score += 3
 
-    if volume_persistence >= 2.0:
+    if volume_persistence >= 3:
         score += 6
-    elif volume_persistence >= 1.3:
+    elif volume_persistence >= 2:
         score += 4
+    elif volume_persistence >= 1.5:
+        score += 2
 
-    if 1.1 <= acceleration <= 4.0:
+    if 1.3 <= acceleration <= 3.0 and prior_acceleration >= 1.2:
         score += 6
+    elif 1.3 <= acceleration <= 3.0:
+        score += 4
+    elif acceleration > 4.5:
+        score -= 5
 
-    if 0.2 <= gain_15m <= 6:
+    if 0.5 <= gain_15m <= 4:
         score += 12
-    elif 0 <= gain_15m < 0.2:
-        score += 6
-
-    if 0.2 <= gain_1h <= 8:
+    elif 0 <= gain_15m < 0.5:
         score += 8
-    elif 0 <= gain_1h < 0.2:
+    elif 4 < gain_15m <= 6:
+        score += 6
+    elif 6 < gain_15m <= 10:
+        score += 1
+
+    if 0.5 <= gain_1h <= 5:
+        score += 8
+    elif 0 <= gain_1h < 0.5:
+        score += 5
+    elif 5 < gain_1h <= 8:
         score += 4
+    elif 8 < gain_1h <= 12:
+        score += 1
+
+    if 0.05 <= efficiency <= 1.25:
+        score += 6
+    elif efficiency <= 2:
+        score += 2
+    elif efficiency > 3:
+        score -= 5
 
     if trend_strong:
         score += 7
     elif trend_bullish:
         score += 4
+    elif ema9 is not None and ema21 is not None and ema9 < ema21:
+        score -= 3
 
-    if funding_rate < -0.0004:
-        score += 8
+    if ema9_slope_15m > 0.3 and ema21_slope_1h > 0.5:
+        score += 4
+    elif ema9_slope_15m < -0.5 or ema21_slope_1h < -1.0:
+        score -= 4
 
-    if buy_pressure_15m >= 0.52:
-        score += 6
+    if buy_pressure_15m >= 0.62 and buy_pressure_delta >= 0.02:
+        score += 7
+    elif buy_pressure_15m >= 0.56:
+        score += 4
     elif buy_pressure_15m < 0.45:
         score -= 6
 
     score += trend_cont
 
-    if -2.5 <= breakout_pct <= 2.5:
+    if -1.0 <= breakout_pct <= 1.5:
         score += 5
+    elif 1.5 < breakout_pct <= 3:
+        score += 2
     elif breakout_pct > 4:
-        score -= 3
+        score -= 4
+    elif breakout_pct < -3:
+        score -= 2
+
+    if upper_wick_ratio > 0.35 and body_pct < 0.5:
+        score -= 5
+    elif close_location >= 0.75 and body_pct > 0:
+        score += 3
 
     if rsi14 is not None:
-        if 45 <= rsi14 <= 78:
-            score += 5
-        elif rsi14 > 85:
+        if 50 <= rsi14 <= 68:
+            score += 4
+        elif 68 < rsi14 <= 76:
+            score += 2
+        elif rsi14 > 82:
             score -= 8
+        elif rsi14 < 42:
+            score -= 4
 
-    if 0 <= gain_24h <= 60:
+    if atr14_pct is not None:
+        if 0.4 <= atr14_pct <= 5:
+            score += 2
+        elif atr14_pct > 8:
+            score -= 3
+
+    if 0 <= gain_24h <= 8:
         score += 4
-    elif gain_24h > 75:
-        score -= 4
+    elif gain_24h < 0:
+        score += 2
+    elif gain_24h <= 14:
+        score += 1
+    elif gain_24h > 20:
+        score -= 3
 
-    if qv24 >= 10_000_000:
+    if qv24 >= 20_000_000:
         liquidity = "HIGH"; score += 4
-    elif qv24 >= 5_000_000:
+    elif qv24 >= 10_000_000:
         liquidity = "GOOD"; score += 3
-    elif qv24 >= 2_000_000:
+    elif qv24 >= 5_000_000:
         liquidity = "MEDIUM"; score += 1
     else:
         liquidity = "LOW"
+
+    if gain_15m > 7 or gain_1h > 10:
+        score -= 8
+    if gain_15m > 8.5 and gain_1h > 12:
+        score -= 10
 
     if is_wash:
         score -= 25
@@ -895,12 +1039,20 @@ def analyze(symbol, ticker):
     # ---------- SETUP ----------
     if is_wash:
         setup = "SUSPECT WASH"
-    elif volume_ratio_15m >= 2.5 and gain_15m >= 0.6:
+    elif (volume_ratio_15m >= 5 and volume_ratio_1h >= 2 and 1.3 <= acceleration <= 4.0
+          and 0.5 <= gain_15m <= 6 and gain_1h <= 8
+          and buy_pressure_15m >= 0.54 and trend_cont >= 3
+          and (rsi14 is None or rsi14 < 78)):
         setup = "SMART EARLY PUMP"
-    elif breakout_pct >= -1.5 and volume_ratio_1h >= 1.5:
+    elif (breakout_pct >= -1 and volume_ratio_1h >= 2
+          and 1.3 <= acceleration <= 4.0 and gain_15m <= 6):
         setup = "BREAKOUT + VOLUME ACCELERATION"
+    elif volume_ratio_1h >= 3 and volume_persistence >= 2:
+        setup = "VOLUME EXPANSION"
+    elif breakout_pct >= 0:
+        setup = "BREAKOUT"
     else:
-        setup = "FLEXIBLE MOMENTUM"
+        setup = "EARLY MOMENTUM"
 
     explosive_probe = {
         "symbol": symbol, "5m": gain_5m, "15m": gain_15m, "1h": gain_1h,
@@ -920,12 +1072,16 @@ def analyze(symbol, ticker):
         setup = "SHORT SQUEEZE"
 
     price_confirmation = (
-        (gain_15m >= 0.5 and gain_5m >= 0.15)
-        or (gain_1h >= 1.0 and gain_5m >= 0.1)
+        (gain_15m >= 1.0 and gain_5m >= 0.3)
+        or (gain_1h >= 2.0 and gain_5m >= 0.2)
+        or (breakout_pct >= 0.0 and close_location >= 0.90
+            and volume_ratio_1h >= 4.0 and gain_15m >= 0.6)
     )
     continuation_quality = (
-        buy_pressure_15m >= 0.50
-        and (rsi14 is None or rsi14 < 82)
+        buy_pressure_15m >= 0.52
+        and (rsi14 is None or rsi14 < 80)
+        and upper_wick_ratio < 0.50
+        and not (gain_15m > 8 and gain_1h > 12)
         and not is_wash
     )
 
@@ -969,7 +1125,7 @@ def analyze(symbol, ticker):
 
 
 # ============================================================
-# Gates (تم تخفيفها لتقليل نسب الرفض المتأخر)
+# Gates
 # ============================================================
 
 def persistent_explosion_gate(x):
@@ -1005,7 +1161,7 @@ def reversal_explosion_gate(x):
     return bool(
         x.get("5m", -999) >= REVERSAL_MIN_5M_MOVE
         and x.get("15m", -999) >= REVERSAL_MIN_15M_MOVE
-        and x.get("1h", 999) <= 3.0
+        and x.get("1h", 999) <= 1.0
         and x.get("volume_15m", 0) >= REVERSAL_MIN_VOLUME_15M
         and x.get("volume_1h", 0) >= REVERSAL_MIN_VOLUME_1H
         and x.get("buy_pressure", 0) >= REVERSAL_MIN_BUY_PRESSURE
@@ -1015,7 +1171,7 @@ def reversal_explosion_gate(x):
         and x.get("24h", 999) <= REVERSAL_MAX_24H_GAIN
         and x.get("green_streak", 0) >= REVERSAL_MIN_GREEN_STREAK
         and x.get("trend_continuity", 0) >= REVERSAL_MIN_TREND_CONTINUITY
-        and x.get("quote_volume", 0) >= MIN_24H_QUOTE_VOLUME
+        and x.get("quote_volume", 0) >= REVERSAL_MIN_24H_VOLUME
     )
 
 
@@ -1039,57 +1195,98 @@ def squeeze_gate(x):
 def explosive_early_gate(x):
     sym = x.get("symbol", "")
     base = sym[:-4] if sym.endswith("USDT") else sym
-    if base in STABLE_BASES or x.get("is_wash"):
+    if base in STABLE_BASES:
+        return False
+    if x.get("is_wash"):
         return False
 
     v15 = x.get("volume_15m", 0)
     accel = x.get("acceleration", 0)
     rsi = x.get("rsi14")
 
-    if v15 > EXPLOSIVE_MAX_VOLUME_15M or accel > EXPLOSIVE_MAX_ACCELERATION or rsi is None or rsi >= EXPLOSIVE_MAX_RSI:
+    if v15 > EXPLOSIVE_MAX_VOLUME_15M:
+        return False
+    if accel > EXPLOSIVE_MAX_ACCELERATION:
+        return False
+    if rsi is None or rsi >= EXPLOSIVE_MAX_RSI:
         return False
 
-    return bool(
+    price_impulse = (
         x.get("5m", -999) >= EXPLOSIVE_MIN_5M_MOVE
         and x.get("15m", -999) >= EXPLOSIVE_MIN_15M_MOVE
-        and v15 >= EXPLOSIVE_MIN_VOLUME_15M
+    )
+    acceleration_ok = (
+        v15 >= EXPLOSIVE_MIN_VOLUME_15M
         and x.get("volume_1h", 0) >= EXPLOSIVE_MIN_VOLUME_1H
         and accel >= EXPLOSIVE_MIN_ACCELERATION
-        and x.get("buy_pressure", 0) >= EXPLOSIVE_MIN_BUY_PRESSURE
+    )
+    structure_ok = (
+        x.get("buy_pressure", 0) >= EXPLOSIVE_MIN_BUY_PRESSURE
         and x.get("upper_wick_ratio", 1.0) < EXPLOSIVE_MAX_UPPER_WICK
         and x.get("breakout", -999) >= EXPLOSIVE_MIN_BREAKOUT
-        and x.get("24h", 999) <= EXPLOSIVE_MAX_24H_GAIN
-        and x.get("1h", 999) <= EXPLOSIVE_MAX_1H_GAIN
-        and x.get("green_streak", 0) >= EXPLOSIVE_MIN_GREEN_STREAK
-        and x.get("trend_continuity", 0) >= EXPLOSIVE_MIN_TREND_CONTINUITY
-        and x.get("quote_volume", 0) >= EXPLOSIVE_MIN_24H_VOLUME
     )
+    early_ok = (
+        x.get("24h", 999) <= EXPLOSIVE_MAX_24H_GAIN
+        and x.get("1h", 999) <= EXPLOSIVE_MAX_1H_GAIN
+        and x.get("15m", 999) <= 4.0
+    )
+    trend_ok = (
+        x.get("green_streak", 0) >= EXPLOSIVE_MIN_GREEN_STREAK
+        and x.get("trend_continuity", 0) >= EXPLOSIVE_MIN_TREND_CONTINUITY
+    )
+    liquidity_ok = x.get("quote_volume", 0) >= EXPLOSIVE_MIN_24H_VOLUME
+
+    return bool(price_impulse and acceleration_ok and structure_ok
+                and early_ok and trend_ok and liquidity_ok)
 
 
 def strict_pump_gate(x):
     sym = x.get("symbol", "")
     base = sym[:-4] if sym.endswith("USDT") else sym
-    if base in STABLE_BASES or x.get("is_wash"):
+    if base in STABLE_BASES:
+        return False
+    if x.get("is_wash"):
         return False
 
     v15 = x.get("volume_15m", 0)
     accel = x.get("acceleration", 0)
     rsi = x.get("rsi14")
 
-    if v15 > WASH_VOL_15M_HARD_CAP or accel > FINAL_MAX_ACCELERATION or rsi is None or rsi >= FINAL_MAX_RSI:
+    if v15 > WASH_VOL_15M_HARD_CAP:
+        return False
+    if accel > FINAL_MAX_ACCELERATION:
+        return False
+    if rsi is None or rsi >= FINAL_MAX_RSI:
+        return False
+    if x.get("buy_pressure", 0) < FINAL_MIN_BUY_PRESSURE:
+        return False
+    if x.get("green_streak", 0) < FINAL_MIN_GREEN_STREAK:
+        return False
+    if x.get("trend_continuity", 0) < FINAL_MIN_TREND_CONTINUITY:
         return False
 
-    return bool(
+    price_ok = (
         x.get("15m", -999) >= FINAL_MIN_15M_MOVE
-        and (x.get("5m", -999) >= FINAL_MIN_5M_MOVE or x.get("breakout", -999) >= 0.0)
-        and x.get("volume_1h", 0) >= FINAL_MIN_VOLUME_1H
-        and v15 >= FINAL_MIN_VOLUME_15M
-        and accel >= FINAL_MIN_ACCELERATION
-        and x.get("buy_pressure", 0) >= FINAL_MIN_BUY_PRESSURE
-        and x.get("green_streak", 0) >= FINAL_MIN_GREEN_STREAK
-        and x.get("trend_continuity", 0) >= FINAL_MIN_TREND_CONTINUITY
-        and x.get("quote_volume", 0) >= FINAL_MIN_24H_VOLUME
+        and (x.get("5m", -999) >= FINAL_MIN_5M_MOVE
+             or x.get("breakout", -999) >= 0.0)
     )
+    volume_ok = (
+        x.get("volume_1h", 0) >= FINAL_MIN_VOLUME_1H
+        and x.get("volume_15m", 0) >= FINAL_MIN_VOLUME_15M
+        and accel >= FINAL_MIN_ACCELERATION
+    )
+    structure_ok = (
+        x.get("upper_wick_ratio", 1.0) < 0.45
+        and x.get("breakout", -999) >= -0.75
+    )
+    not_late = (
+        x.get("24h", 999) <= FINAL_MAX_24H_GAIN
+        and x.get("15m", 999) <= 6.0
+        and x.get("1h", 999) <= 10.0
+    )
+    liquidity_ok = x.get("quote_volume", 0) >= FINAL_MIN_24H_VOLUME
+
+    return bool(price_ok and volume_ok and structure_ok and not_late and liquidity_ok)
 
 
 def has_price_confirmation(x):
@@ -1098,16 +1295,23 @@ def has_price_confirmation(x):
     return bool(strict_pump_gate(x) or explosive_early_gate(x))
 
 
+def final_lane(x):
+    """يرجّع اسم المسار اللي أهّل الإشارة للـFINAL (أو None). مستخدم في التعلّم الذاتي."""
+    score = x.get("score", 0)
+    cq = x.get("continuation_quality")
+    if score >= FINAL_SCORE and has_price_confirmation(x):
+        return "EXPLOSIVE" if explosive_early_gate(x) else "STRICT"
+    if score >= PERSISTENT_FINAL_SCORE and cq and persistent_explosion_gate(x):
+        return "PERSISTENT"
+    if score >= REVERSAL_FINAL_SCORE and cq and reversal_explosion_gate(x):
+        return "REVERSAL"
+    if score >= SQUEEZE_FINAL_SCORE and cq and squeeze_gate(x):
+        return "SQUEEZE"
+    return None
+
+
 def final_candidate_eligible(x):
-    if x.get("score", 0) >= FINAL_SCORE and has_price_confirmation(x):
-        return True
-    if x.get("score", 0) >= PERSISTENT_FINAL_SCORE and x.get("continuation_quality") and persistent_explosion_gate(x):
-        return True
-    if x.get("score", 0) >= REVERSAL_FINAL_SCORE and x.get("continuation_quality") and reversal_explosion_gate(x):
-        return True
-    if x.get("score", 0) >= SQUEEZE_FINAL_SCORE and x.get("continuation_quality") and squeeze_gate(x):
-        return True
-    return False
+    return final_lane(x) is not None
 
 
 # ============================================================
@@ -1240,9 +1444,7 @@ def compressed_gate(x):
         and x.get("volume_15m", 0) >= COMPRESSED_MIN_VOL_15M
         and x.get("15m", 999) <= COMPRESSED_MAX_15M_GAIN
         and x.get("24h", 999) <= COMPRESSED_MAX_24H_GAIN
-        and rsi is not None
-        and COMPRESSED_MIN_RSI <= rsi <= COMPRESSED_MAX_RSI
-        and x.get("buy_pressure", 0) >= COMPRESSED_MIN_BUY_PRESSURE
+        and (rsi is None or rsi <= COMPRESSED_MAX_RSI)
         and x.get("quote_volume", 0) >= MIN_24H_QUOTE_VOLUME
     )
 
@@ -1254,7 +1456,7 @@ def format_compressed(x):
 
 COIN: {x['symbol']}
 الفكرة (باك-تيست 30 يوم): العملات اللي بتقفز بتكون أبعد تحت قمتها
-من المعتاد (-11% vs -7%) مع انحراف 4h موجب بسيط والحجم بدأ يصعد.
+من المعتاد (-11% vs -7%) مع انحراف 4h موجب بسيط وحجم بدأ يصعد.
 
 Price: {x['price']:.10g}
 4h:  {x.get('4h', 0):+.2f}%
@@ -1282,7 +1484,9 @@ def maybe_compressed_alert(x, now):
     for s in [s for s, t in compressed_alerted.items() if t < cutoff]:
         compressed_alerted.pop(s, None)
     log_early_watch(x, now)
-    log.info(f"🧨 COMPRESSED (no telegram): {sym} breakout={x['breakout']:+.2f}% 4h={x.get('4h', 0):+.2f}%")
+    if COMPRESSED_TELEGRAM:
+        telegram_send(format_compressed(x))
+    log.info(f"🧨 COMPRESSED alert: {sym} breakout={x['breakout']:+.2f}% 4h={x.get('4h', 0):+.2f}%")
     return True
 
 
@@ -1394,6 +1598,12 @@ def append_scan_diagnostics(rows):
     now = time.time()
     accepted = []
     for row in rows:
+        stage = row.get("stage")
+        # 70% من الملف كان LOW_24H_QUOTE_VOLUME بلا فايدة -> مش بنسجّله
+        if stage in ("UNIVERSE_FILTER", "SHARIAH_FILTER", "TICKER_DATA"):
+            continue
+        if stage == "SCORE_FILTER" and (row.get("score") or 0) < WATCH_SCORE - 5:
+            continue
         key = "|".join(str(row.get(k, "")) for k in ("symbol", "stage", "reason"))
         last = diagnostics_last_logged.get(key, 0)
         cooldown = (SHARIAH_DIAGNOSTIC_COOLDOWN_HOURS * 3600
@@ -1462,6 +1672,7 @@ ATR14 used: {r['atr_used']:.2f}%
 
 COIN: {x['symbol']}
 SETUP: {x['setup']}
+LANE: {x.get('lane', '-')}
 EARLY SCORE: {x['score']}/100
 
 Price: {x['price']:.10g}
@@ -1506,21 +1717,24 @@ Confirmation scans: {confirmations}
 # ============================================================
 
 def cleanup_old_csv_logs(force=False):
+    """حذف الصفوف القديمة. مقارنة نصية على ISO-UTC (أسرع بكتير من pd.to_datetime لكل صف)."""
     from datetime import timedelta
-    cutoff = datetime.now(timezone.utc) - timedelta(days=LOG_RETENTION_DAYS)
+    now_dt = datetime.now(timezone.utc)
     files = [
-        (EARLY_WATCH_LOG_FILE, "logged_time_utc"),
-        (TRACK_FILE, "final_time_utc"),
-        (SCAN_DIAGNOSTICS_FILE, "logged_time_utc"),
+        (EARLY_WATCH_LOG_FILE, "logged_time_utc", LOG_RETENTION_DAYS),
+        (TRACK_FILE, "final_time_utc", TRACK_RETENTION_DAYS),
+        (SCAN_DIAGNOSTICS_FILE, "logged_time_utc", LOG_RETENTION_DAYS),
     ]
 
-    for filename, time_col in files:
+    for filename, time_col, days in files:
         if not os.path.exists(filename):
             continue
+        cutoff_str = (now_dt - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
         tmp_name = filename + ".cleanup.tmp"
         try:
-            with open(filename, "r", newline="", encoding="utf-8-sig") as src:
-                reader = csv.reader(src)
+            kept = removed = 0
+            with open(filename, "r", newline="", encoding="utf-8-sig") as src_f:
+                reader = csv.reader(src_f)
                 header = next(reader, None)
                 if not header:
                     continue
@@ -1529,8 +1743,6 @@ def cleanup_old_csv_logs(force=False):
                 except ValueError:
                     log.warning(f"Log cleanup skipped {filename}: missing column {time_col}")
                     continue
-
-                kept = removed = invalid_dates = 0
                 with open(tmp_name, "w", newline="", encoding="utf-8") as dst:
                     writer = csv.writer(dst)
                     writer.writerow(header)
@@ -1538,24 +1750,16 @@ def cleanup_old_csv_logs(force=False):
                         if not row:
                             continue
                         raw_ts = row[time_idx].strip() if len(row) > time_idx else ""
-                        try:
-                            parsed = pd.to_datetime(raw_ts, utc=True, errors="raise")
-                            parsed_dt = parsed.to_pydatetime()
-                            if parsed_dt < cutoff:
-                                removed += 1
-                                continue
-                        except Exception:
-                            invalid_dates += 1
+                        if len(raw_ts) >= 19 and raw_ts[:4].isdigit() and raw_ts[:19] < cutoff_str:
+                            removed += 1
+                            continue
                         writer.writerow(row)
                         kept += 1
-
             if removed:
                 os.replace(tmp_name, filename)
-                log.info(f"Log cleanup: حذف {removed} سجل قديم من {filename}")
+                log.info(f"Log cleanup: حذف {removed} سجل قديم من {filename} (بقى {kept})")
             else:
                 os.remove(tmp_name)
-            if invalid_dates:
-                log.warning(f"Log cleanup: {invalid_dates} سجل في {filename} timestamp غير صالح")
         except Exception as e:
             try:
                 if os.path.exists(tmp_name):
@@ -1565,29 +1769,52 @@ def cleanup_old_csv_logs(force=False):
             log.warning(f"Log cleanup failed for {filename}: {e}")
 
 
+def maybe_cleanup_logs(force=False):
+    now = time.time()
+    last = float(meta.get("last_cleanup_ts", 0) or 0)
+    if force or now - last >= LOG_CLEANUP_INTERVAL_HOURS * 3600:
+        cleanup_old_csv_logs()
+        meta["last_cleanup_ts"] = now
+
+
+TRACK_COLUMNS = [
+    "final_time_utc", "symbol", "setup", "score",
+    "entry_price", "sl", "sl_pct", "tp1", "tp1_pct", "tp2", "tp2_pct",
+    "atr_used", "quote_volume", "liquidity",
+    "gain_5m_at_alert", "gain_15m_at_alert",
+    "gain_1h_at_alert", "gain_24h_at_alert",
+    "peak_price", "lowest_price", "mfe_pct", "mae_pct",
+    "result_5m", "result_15m", "result_30m",
+    "result_1h", "result_4h", "result_24h", "status",
+    "lane", "outcome", "exit_pct", "outcome_min",
+]
+
+
 def init_results_file():
-    columns = [
-        "final_time_utc", "symbol", "setup", "score",
-        "entry_price", "sl", "sl_pct", "tp1", "tp1_pct", "tp2", "tp2_pct",
-        "atr_used", "quote_volume", "liquidity",
-        "gain_5m_at_alert", "gain_15m_at_alert",
-        "gain_1h_at_alert", "gain_24h_at_alert",
-        "peak_price", "lowest_price", "mfe_pct", "mae_pct",
-        "result_5m", "result_15m", "result_30m",
-        "result_1h", "result_4h", "result_24h", "status",
-    ]
-    if not os.path.exists(TRACK_FILE):
+    columns = TRACK_COLUMNS
+    if not os.path.exists(TRACK_FILE) or os.path.getsize(TRACK_FILE) == 0:
         pd.DataFrame(columns=columns).to_csv(TRACK_FILE, index=False)
     else:
         try:
-            with open(TRACK_FILE, "r", encoding="utf-8-sig") as f:
-                old_cols = f.readline().strip().split(",")
-            if old_cols != columns:
-                os.replace(TRACK_FILE, TRACK_FILE + ".bak")
-                pd.DataFrame(columns=columns).to_csv(TRACK_FILE, index=False)
-                log.warning(f"TRACK_FILE بهيدر قديم — اتنقل لـ .bak")
+            df = pd.read_csv(TRACK_FILE)
+            missing = [c for c in columns if c not in df.columns]
+            if missing:
+                # ترحيل بدون فقد أي صف: بنضيف الأعمدة الناقصة بس
+                for c in missing:
+                    df[c] = None
+                extra = [c for c in df.columns if c not in columns]
+                df = df[columns + extra]
+                tmp = TRACK_FILE + ".migrate.tmp"
+                df.to_csv(tmp, index=False)
+                os.replace(tmp, TRACK_FILE)
+                log.info(f"TRACK_FILE: اتضافت أعمدة {missing} (الصفوف القديمة محفوظة)")
         except Exception as e:
             log.warning(f"init_results_file migration failed: {e}")
+            try:
+                os.replace(TRACK_FILE, TRACK_FILE + ".bak")
+                pd.DataFrame(columns=columns).to_csv(TRACK_FILE, index=False)
+            except Exception as e2:
+                log.warning(f"TRACK_FILE backup failed: {e2}")
 
     try:
         if os.path.exists(TRACK_FILE) and os.path.getsize(TRACK_FILE) > 0:
@@ -1610,8 +1837,6 @@ def init_results_file():
                 old_cols = next(csv.reader(f), [])
             if "logged_time_utc" not in old_cols:
                 log.warning("EARLY_WATCH_LOG_FILE lacks logged_time_utc; kept untouched.")
-            elif old_cols != WATCH_LOG_HEADER:
-                log.info(f"EARLY_WATCH_LOG_FILE schema differs ({len(old_cols)} columns); kept legacy rows.")
         except Exception as e:
             log.warning(f"watch log schema check failed: {e}")
 
@@ -1647,6 +1872,10 @@ def save_track(track):
         "result_4h": track["results"].get(240),
         "result_24h": track["results"].get(1440),
         "status": track["status"],
+        "lane": track.get("lane"),
+        "outcome": track.get("outcome"),
+        "exit_pct": track.get("exit_pct"),
+        "outcome_min": track.get("outcome_min"),
     }
     columns = list(row.keys())
     try:
@@ -1679,34 +1908,114 @@ def save_track(track):
         raise
 
 
+def _first_minute_after(ts_sec):
+    return (int(ts_sec // 60) + 1) * 60 * 1000
+
+
+def walk_track_path(symbol, track, now_ms):
+    """
+    يمشي على شموع 1m من لحظة الإشارة ويحدد مين اتحقق الأول: SL ولا TP1 (أو TIMEOUT).
+    - لو SL وTP1 في نفس الشمعة -> SL (افتراض متحفّظ).
+    - بيحدّث peak/lowest من high/low الشموع (مش من سعر لحظي بس).
+    """
+    entry = track["entry_price"]
+    sl, tp1 = track.get("sl"), track.get("tp1")
+    t0_ms = _first_minute_after(track["start_ts"])
+    start_ms = int(track.get("last_k_ms") or t0_ms)
+    limit = 1000
+    for _ in range(3):
+        rows = get_json("/api/v3/klines",
+                        {"symbol": symbol, "interval": "1m", "startTime": start_ms, "limit": limit},
+                        retries=2)
+        if not rows:
+            return
+        for r in rows:
+            open_t, close_t = int(r[0]), int(r[6])
+            if close_t >= now_ms - 2000:          # شمعة لسه مقفولتش
+                return
+            hi, lo, cl = float(r[2]), float(r[3]), float(r[4])
+            track["peak_price"] = max(track["peak_price"], hi)
+            track["lowest_price"] = min(track["lowest_price"], lo)
+            minutes_in = (open_t - t0_ms) / 60000.0
+            if track.get("outcome") is None and sl and tp1:
+                if lo <= sl:
+                    track["outcome"], track["exit_pct"] = "SL", pct(sl, entry)
+                elif hi >= tp1:
+                    track["outcome"], track["exit_pct"] = "TP1", pct(tp1, entry)
+                elif minutes_in >= TRADE_TIMEOUT_MIN:
+                    track["outcome"], track["exit_pct"] = "TIMEOUT", pct(cl, entry)
+                if track.get("outcome") is not None:
+                    track["outcome_min"] = round(minutes_in + 1, 1)
+            track["last_k_ms"] = open_t + 60000
+        if len(rows) < limit:
+            return
+        start_ms = int(track["last_k_ms"])
+
+
+def notify_outcome(track):
+    if not NOTIFY_OUTCOMES or track.get("notified"):
+        return
+    oc = track.get("outcome")
+    if oc not in ("TP1", "SL", "TIMEOUT"):
+        return
+    icon = {"TP1": "✅", "SL": "❌", "TIMEOUT": "⏱️"}[oc]
+    msg = (f"{PROGRAM_TAG} {icon} نتيجة إشارة {track['symbol']}: {oc}\n"
+           f"Lane: {track.get('lane', '-')} | Setup: {track.get('setup', '-')}\n"
+           f"الخروج: {track.get('exit_pct', 0):+.2f}% بعد {track.get('outcome_min', 0):.0f} دقيقة\n"
+           f"أقصى ربح لحظي: {track.get('mfe_pct', 0):+.2f}% | أقصى نزول: {track.get('mae_pct', 0):+.2f}%")
+    telegram_send(msg)
+    track["notified"] = True
+
+
 def update_tracking(tickers):
     now = time.time()
+    now_ms = int(now * 1000)
     MAX_AGE_MIN = 1500
     for symbol, track in list(active_tracks.items()):
+        elapsed_min = (now - track["start_ts"]) / 60
+        entry = track["entry_price"]
+        changed = False
+
+        had_outcome = track.get("outcome") is not None
+        try:
+            walk_track_path(symbol, track, now_ms)
+        except Exception as e:
+            log.debug(f"walk_track_path failed for {symbol}: {e}")
+        if track.get("outcome") is not None and not had_outcome:
+            changed = True
+
         price = tickers.get(symbol, {}).get("price")
         if price is None or price <= 0:
-            if (now - track["start_ts"]) / 60 > MAX_AGE_MIN:
+            if elapsed_min > MAX_AGE_MIN:
+                if track.get("outcome") is None:
+                    track["outcome"], track["exit_pct"] = "TIMEOUT", track.get("mae_pct", 0.0)
                 track["status"] = "COMPLETED"
                 save_track(track)
                 del active_tracks[symbol]
+            elif changed:
+                save_track(track)
             continue
 
-        entry = track["entry_price"]
         track["peak_price"] = max(track["peak_price"], price)
         track["lowest_price"] = min(track["lowest_price"], price)
         track["mfe_pct"] = pct(track["peak_price"], entry)
         track["mae_pct"] = pct(track["lowest_price"], entry)
 
-        elapsed_min = (now - track["start_ts"]) / 60
-        saved = False
         for target in TRACK_MINUTES:
             if target not in track["results"] and elapsed_min >= target:
                 track["results"][target] = pct(price, entry)
-                saved = True
+                changed = True
 
-        if saved:
+        if elapsed_min >= TRADE_TIMEOUT_MIN + 10 and track.get("outcome") is None:
+            # ماقدرناش نجيب الشموع (خطأ شبكة) -> نقفل بالسعر الحالي
+            track["outcome"], track["exit_pct"] = "TIMEOUT", pct(price, entry)
+            track["outcome_min"] = round(elapsed_min, 1)
+            changed = True
+
+        if changed:
             track["status"] = "TRACKING"
             save_track(track)
+        notify_outcome(track)
 
         if elapsed_min >= 1440:
             track["status"] = "COMPLETED"
@@ -1769,6 +2078,12 @@ def start_final_tracking(x):
         "results": {},
         "start_ts": time.time(),
         "status": "TRACKING",
+        "lane": x.get("lane"),
+        "outcome": None,
+        "exit_pct": None,
+        "outcome_min": None,
+        "last_k_ms": None,
+        "notified": False,
     }
     save_track(active_tracks[x["symbol"]])
 
@@ -1809,7 +2124,26 @@ def maybe_final_signal(x, now):
     if not final_candidate_eligible(x):
         return False
 
-    final_x = x if x["score"] >= c["best"]["score"] else c["best"]
+    first = c["first"]
+    second_confirmed = (
+        x.get("continuation_quality", False)
+        and x["5m"] > -0.3
+        and x["15m"] >= first["15m"] - 1.0
+        and x["volume_1h"] >= first["volume_1h"] * 0.70
+    )
+
+    if not second_confirmed:
+        return False
+
+    # نستخدم مسح الآن (مش best القديم) + سعر لحظي، عشان الدخول/SL/TP يطابقوا اللي يقدر المستخدم ينفذه
+    final_x = dict(x)
+    final_x["lane"] = final_lane(x)
+    final_x["score"] = max(x["score"], c["best"]["score"])
+    live = (current_tickers.get(sym) or {}).get("price")
+    if live and live > 0:
+        final_x["price"] = live
+        final_x["risk"] = compute_risk_levels(live, final_x.get("atr_pct"),
+                                              final_x.get("rsi14"), final_x["liquidity"])
 
     cross_label, cross_detail = cross_exchange_confirmation(sym)
 
@@ -1849,6 +2183,7 @@ def save_state():
         "okx_lead_alerted": okx_lead_alerted,
         "compressed_alerted": compressed_alerted,
         "diagnostics_last_logged": diagnostics_last_logged,
+        "meta": meta,
     }
     try:
         with open(STATE_FILE, "w", encoding="utf-8") as f:
@@ -1875,6 +2210,7 @@ def load_state():
     okx_lead_alerted.update(state.get("okx_lead_alerted", {}))
     compressed_alerted.update(state.get("compressed_alerted", {}))
     diagnostics_last_logged.update(state.get("diagnostics_last_logged", {}))
+    meta.update(state.get("meta", {}) or {})
 
     for sym, tr in state.get("active_tracks", {}).items():
         tr["results"] = {int(k): v for k, v in tr.get("results", {}).items()}
@@ -1888,15 +2224,18 @@ def load_state():
 def run_cycle(symbols):
     cycle_start = time.time()
 
+    # التتبع الأول: لازم يشتغل حتى لو السوق منهار (عشان نسجّل SL/TP صح)
+    tickers = get_tickers()
+    current_tickers.clear()
+    current_tickers.update(tickers)
+    update_tracking(tickers)
+
     btc_safe, btc_15m, btc_1h = check_btc_market_health()
     if not btc_safe:
-        log.warning(f"⚠️ BTC crash: 15m={btc_15m:+.2f}% 1h={btc_1h:+.2f}% — توقف")
+        log.warning(f"⚠️ BTC crash: 15m={btc_15m:+.2f}% 1h={btc_1h:+.2f}% — توقف عن إشارات جديدة")
         return max(10, SCAN_EVERY_SECONDS - (time.time() - cycle_start))
 
     fetch_funding_rates_bulk()
-
-    tickers = get_tickers()
-    update_tracking(tickers)
     now_dt = datetime.now(timezone.utc).isoformat()
     diagnostics = []
 
@@ -1918,7 +2257,7 @@ def run_cycle(symbols):
             universe.append(symbol)
 
     results = []
-    with ThreadPoolExecutor(max_workers=20) as ex:
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
         futures = {ex.submit(analyze, symbol, tickers[symbol]): symbol for symbol in universe}
         for fut in as_completed(futures):
             symbol = futures[fut]
@@ -1977,7 +2316,7 @@ def run_cycle(symbols):
         log.info(f"No watch candidates >= {WATCH_SCORE}")
     else:
         log.info(f"Watch candidates: {len(results)}")
-        for x in results[:10]:
+        for x in results[:MAX_PROCESS_PER_CYCLE]:
             log.info(
                 f"{x['symbol']:12} Score={x['score']:3} "
                 f"15m={x['15m']:+6.2f}% Vol1h={x['volume_1h']:5.2f}x "
@@ -1996,7 +2335,7 @@ def run_cycle(symbols):
 
     okx_lead_scan(tickers, symbols)
     cleanup_expired_candidates(now)
-    cleanup_old_csv_logs()
+    maybe_cleanup_logs()
     log.info(f"Active tracks: {len(active_tracks)} | Pending: {len(candidates)}")
     return max(10, SCAN_EVERY_SECONDS - (time.time() - cycle_start))
 
@@ -2005,12 +2344,14 @@ def run_cycle(symbols):
 # Main
 # ============================================================
 
+load_auto_thresholds()
+
 ONCE = "--once" in sys.argv
 
 init_results_file()
 load_state()
 update_shariah_list(force=False)
-cleanup_old_csv_logs(force=True)
+maybe_cleanup_logs()
 last_log_cleanup_ts = time.time()
 
 log.info("تحميل قائمة Binance...")
@@ -2038,7 +2379,6 @@ while True:
         sleep_time = run_cycle(symbols)
         save_state()
         if time.time() - last_log_cleanup_ts >= LOG_CLEANUP_INTERVAL_HOURS * 3600:
-            cleanup_old_csv_logs(force=True)
             update_shariah_list(force=False)
             last_log_cleanup_ts = time.time()
         log.info(f"Next scan in {sleep_time:.0f}s...")
