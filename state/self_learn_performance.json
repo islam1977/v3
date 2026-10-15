@@ -1,0 +1,45 @@
+{
+  "updated_at_utc": "2026-10-15 01:31",
+  "decided_signals_total": 16,
+  "window": 16,
+  "overall": {
+    "n": 16,
+    "win_rate": 0.125,
+    "sl_rate": 0.812,
+    "timeout_rate": 0.062,
+    "avg_exit_pct": -2.42,
+    "expectancy_R": -0.692
+  },
+  "by_lane": {
+    "EXPLOSIVE": {
+      "n": 2,
+      "win_rate": 0.0,
+      "sl_rate": 1.0,
+      "timeout_rate": 0.0,
+      "avg_exit_pct": -3.5,
+      "expectancy_R": -1.0,
+      "decision": "عينة صغيرة (<15)"
+    },
+    "PERSISTENT": {
+      "n": 8,
+      "win_rate": 0.125,
+      "sl_rate": 0.75,
+      "timeout_rate": 0.125,
+      "avg_exit_pct": -2.44,
+      "expectancy_R": -0.696,
+      "decision": "عينة صغيرة (<15)"
+    },
+    "STRICT": {
+      "n": 6,
+      "win_rate": 0.167,
+      "sl_rate": 0.833,
+      "timeout_rate": 0.0,
+      "avg_exit_pct": -2.04,
+      "expectancy_R": -0.583,
+      "decision": "عينة صغيرة (<15)"
+    }
+  },
+  "adjustments": {},
+  "dry_run": false,
+  "note": "expectancy_R = متوسط (النتيجة % / نسبة SL). موجب = رابح. التعادل عند فوز ~40% لو TP1=1.5R."
+}
