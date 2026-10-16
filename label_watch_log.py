@@ -311,7 +311,7 @@ def report(w, res, fee, slip, delay, reasons=None):
               "breakout", "trend_continuity", "green_streak", "log_qv", "hour_utc"):
         if f not in df or df[f].nunique() < 4 or len(df) < 80:
             continue
-        rho = df[f].corr(df["net"], method="spearman")
+        rho = df[f].rank().corr(df["net"].rank())  # Spearman بدون scipy (ارتباط الرتب)
         try:
             q = pd.qcut(df[f], 4, duplicates="drop")
             g = df.groupby(q, observed=True)["net"].agg(["count", "mean"])
