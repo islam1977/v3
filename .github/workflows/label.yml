@@ -1,0 +1,65 @@
+name: Label Watch Log (قياس الخطوة 1)
+
+# تشغيل يدوي فقط (Actions -> Label Watch Log -> Run workflow).
+# مهم: مابيعملش commit ولا push خالص، عشان ما يتعارضش مع push بتاع الماسح
+# (الماسح بيعمل `git push || true`، وأي push تاني ممكن يضيّع state دورة).
+# النتيجة بتظهر في صفحة التشغيل (Summary) وكمان Artifact قابل للتحميل.
+on:
+  workflow_dispatch:
+    inputs:
+      delay_min:
+        description: "تأخير الدخول بالدقائق (GitHub + تليجرام + تنفيذك)"
+        default: "2"
+      fee_pct:
+        description: "رسوم ذهاب+إياب %"
+        default: "0.2"
+      slip_pct:
+        description: "انزلاق إضافي عند الخروج بالـSL %"
+        default: "0.1"
+
+concurrency:
+  group: label-watch
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout (آخر نسخة بس، من غير history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run labeling
+        run: |
+          python label_watch_log.py \
+            --delay "${{ inputs.delay_min || '2' }}" \
+            --fee "${{ inputs.fee_pct || '0.2' }}" \
+            --slip "${{ inputs.slip_pct || '0.1' }}"
+
+      - name: Show report in run summary
+        if: always()
+        run: |
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat label_out/label_report.txt >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo "no report" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: label-results
+          path: label_out/
