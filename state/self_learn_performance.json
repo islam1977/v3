@@ -1,14 +1,14 @@
 {
-  "updated_at_utc": "2026-10-15 01:31",
-  "decided_signals_total": 16,
-  "window": 16,
+  "updated_at_utc": "2026-10-16 19:26",
+  "decided_signals_total": 26,
+  "window": 26,
   "overall": {
-    "n": 16,
-    "win_rate": 0.125,
-    "sl_rate": 0.812,
-    "timeout_rate": 0.062,
-    "avg_exit_pct": -2.42,
-    "expectancy_R": -0.692
+    "n": 26,
+    "win_rate": 0.308,
+    "sl_rate": 0.577,
+    "timeout_rate": 0.115,
+    "avg_exit_pct": -0.97,
+    "expectancy_R": -0.276
   },
   "by_lane": {
     "EXPLOSIVE": {
@@ -21,21 +21,21 @@
       "decision": "عينة صغيرة (<15)"
     },
     "PERSISTENT": {
-      "n": 8,
-      "win_rate": 0.125,
-      "sl_rate": 0.75,
-      "timeout_rate": 0.125,
-      "avg_exit_pct": -2.44,
-      "expectancy_R": -0.696,
+      "n": 11,
+      "win_rate": 0.273,
+      "sl_rate": 0.636,
+      "timeout_rate": 0.091,
+      "avg_exit_pct": -1.29,
+      "expectancy_R": -0.37,
       "decision": "عينة صغيرة (<15)"
     },
     "STRICT": {
-      "n": 6,
-      "win_rate": 0.167,
-      "sl_rate": 0.833,
-      "timeout_rate": 0.0,
-      "avg_exit_pct": -2.04,
-      "expectancy_R": -0.583,
+      "n": 13,
+      "win_rate": 0.385,
+      "sl_rate": 0.462,
+      "timeout_rate": 0.154,
+      "avg_exit_pct": -0.3,
+      "expectancy_R": -0.086,
       "decision": "عينة صغيرة (<15)"
     }
   },
