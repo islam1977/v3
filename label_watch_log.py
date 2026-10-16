@@ -64,14 +64,16 @@ def fetch_1m(symbol, start_ms, limit):
 
 
 def to_arrays(rows, start_ms, now_ms):
-    """شموع مقفولة بس + فحص إن أول شمعة قريبة من وقت الدخول المطلوب."""
-    if not rows:
-        return None
+    """شموع مقفولة بس + فحص إن أول شمعة قريبة من وقت الدخول. يرجّع (arrays|None, سبب الفشل)."""
+    if rows is None:
+        return None, "فشل الجلب/الرمز غير موجود"
     rows = [r for r in rows if int(r[6]) < now_ms - 2000]
-    if not rows or abs(int(rows[0][0]) - start_ms) > 180_000:
-        return None
+    if not rows:
+        return None, "مفيش شموع مقفولة بعد الوقت ده"
+    if abs(int(rows[0][0]) - start_ms) > 180_000:
+        return None, "أول شمعة بعيدة عن وقت الدخول (رمز اتدرج بعدها/فجوة)"
     a = np.array([[float(r[1]), float(r[2]), float(r[3]), float(r[4])] for r in rows])
-    return a[:, 0], a[:, 1], a[:, 2], a[:, 3]  # open, high, low, close
+    return (a[:, 0], a[:, 1], a[:, 2], a[:, 3]), "ok"
 
 
 # ============================================================ المحاكاة
@@ -189,7 +191,10 @@ def load_watch(path):
     w = pd.read_csv(path)
     w["ts"] = pd.to_datetime(w["logged_time_utc"], utc=True, errors="coerce")
     w = w.dropna(subset=["ts", "symbol"]).sort_values("ts").reset_index(drop=True)
-    w["ts_ms"] = (w["ts"].astype("int64") // 10 ** 6).astype("int64")
+    # مستقل عن دقة الوقت في pandas (ns/us) — الطريقة القديمة (astype int64) كانت بتفشل مع pandas 3
+    w["ts_ms"] = ((w["ts"] - pd.Timestamp("1970-01-01", tz="UTC")) // pd.Timedelta(milliseconds=1)).astype("int64")
+    if len(w) and not (1.5e12 < w["ts_ms"].median() < 4e12):
+        raise SystemExit(f"خطأ: تحويل الوقت غلط (median ts_ms={w['ts_ms'].median()}). راجع صيغة logged_time_utc.")
     w["hour_utc"] = w["ts"].dt.hour
     return w
 
@@ -203,26 +208,29 @@ def collect(w, delay, workers, rng, now_ms, fetch):
         ctrl_start = ((ctrl_ms // 60000) + 1) * 60000
         jobs.append((i, "watch", r.symbol, real_start))
         jobs.append((i, "control", r.symbol, ctrl_start))
-    res = {}
+    res, reasons = {}, {}
     limit = MAX_T + delay + 15
 
     def work(job):
         i, kind, sym, start = job
         rows = fetch(sym, start, limit)
-        return job, to_arrays(rows, start, now_ms)
+        arr, why = to_arrays(rows, start, now_ms)
+        return job, arr, why
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futs = [ex.submit(work, j) for j in jobs]
         for n, f in enumerate(as_completed(futs), 1):
-            job, arr = f.result()
+            job, arr, why = f.result()
             if arr is not None:
                 res[(job[0], job[1])] = arr
+            else:
+                reasons[why] = reasons.get(why, 0) + 1
             if n % 300 == 0:
                 print(f"  ... {n}/{len(jobs)}")
-    return res
+    return res, reasons
 
 
-def report(w, res, fee, slip, delay):
+def report(w, res, fee, slip, delay, reasons=None):
     variants = build_variants()
     watch = [{"i": i, "arr": res[(i, "watch")]} for i in range(len(w)) if (i, "watch") in res]
     ctrl = [{"i": i, "arr": res[(i, "control")]} for i in range(len(w)) if (i, "control") in res]
@@ -230,6 +238,11 @@ def report(w, res, fee, slip, delay):
     emit(f"تقرير القياس | حالات watch: {len(w)} | شموع متاحة: watch={len(watch)} control={len(ctrl)}")
     emit(f"رسوم={fee}% | انزلاق SL={slip}% | تأخير الدخول={delay}د | الفترة: {w.ts.min():%Y-%m-%d %H:%M} → {w.ts.max():%Y-%m-%d %H:%M}")
     emit("=" * 78)
+    if reasons:
+        emit("طلبات فشلت: " + " | ".join(f"{k}: {v}" for k, v in reasons.items()))
+    if not watch:
+        emit("\nمفيش ولا شمعة اتجابت. راجع سبب الفشل فوق (الشبكة/حظر 451 من Binance؟ أو وقت غلط؟) وابعتهولي.")
+        return pd.DataFrame(), None
     emit("ملاحظة: الحالات متجمعة زمنياً (نفس السوق في نفس الوقت) فالعينة الفعلية المستقلة أقل من n.")
 
     # [1] حركة السعر بعد الرصد مقابل عشوائي
@@ -360,8 +373,12 @@ def main():
         w = w.tail(a.max_rows).reset_index(drop=True)
 
     print(f"حالات: {len(w)} | جلب الشموع (watch + ضابطة = {2 * len(w)} طلب)...")
-    res = collect(w, a.delay, a.workers, rng, now_ms, fetch)
-    df, base = report(w, res, a.fee, a.slip, a.delay)
+    res, reasons = collect(w, a.delay, a.workers, rng, now_ms, fetch)
+    df, base = report(w, res, a.fee, a.slip, a.delay, reasons)
+    if df.empty:
+        with open(os.path.join(OUT_DIR, "label_report.txt"), "w", encoding="utf-8") as f:
+            f.write("\n".join(OUT))
+        sys.exit(1)
 
     # CSV: مؤشرات + النتيجة على الإعداد الحالي + MFE/MAE
     extra = {"mfe_60": [], "mae_60": [], "mfe_240": [], "mae_240": []}
