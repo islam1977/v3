@@ -1,0 +1,29 @@
+name: Entry quality tests
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "entry_quality.py"
+      - "binance_early_pump_v4.py"
+      - "tests/test_entry_quality.py"
+      - ".github/workflows/entry-quality-tests.yml"
+  push:
+    branches: [feature/one-minute-entry-confirmation]
+    paths:
+      - "entry_quality.py"
+      - "binance_early_pump_v4.py"
+      - "tests/test_entry_quality.py"
+      - ".github/workflows/entry-quality-tests.yml"
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install requests pandas
+      - run: python -m py_compile entry_quality.py binance_early_pump_v4.py tests/test_entry_quality.py
+      - run: python -m unittest discover -s tests -p "test_entry_quality.py" -v

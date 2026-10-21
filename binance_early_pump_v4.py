@@ -26,6 +26,7 @@ import requests, time, math, csv, os, json, sys, logging, re, html
 import pandas as pd
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from entry_quality import confirm_one_minute_entry
 
 # ---------- Logging ----------
 logging.basicConfig(
@@ -2182,6 +2183,22 @@ def maybe_final_signal(x, now):
         candidates.pop(sym, None)
         return False
 
+    # Entry-quality gate: only use completed 1m candles, never the live/forming candle.
+    try:
+        one_minute_rows = get_json(
+            "/api/v3/klines", {"symbol": sym, "interval": "1m", "limit": 3}, retries=2
+        )
+        entry_ok, entry_reason, entry_metrics = confirm_one_minute_entry(
+            one_minute_rows or [], float(x.get("price") or final_x.get("price") or 0)
+        )
+    except Exception as exc:
+        entry_ok, entry_reason, entry_metrics = False, "1M_CONFIRMATION_FETCH_ERROR", {}
+        log.warning(f"[EntryQuality] {sym}: 1m confirmation fetch failed: {exc}")
+    if not entry_ok:
+        log.info(f"[EntryQuality] {sym}: FINAL blocked ({entry_reason}) metrics={entry_metrics}")
+        return False
+
+    log.info(f"[EntryQuality] {sym}: 1m confirmation passed metrics={entry_metrics}")
     final_cooldown[sym] = now
     candidates.pop(sym, None)
 
