@@ -1,0 +1,77 @@
+name: Run historical pump analysis
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Historical window in days"
+        required: true
+        default: "30"
+        type: choice
+        options:
+          - "7"
+          - "30"
+      workers:
+        description: "Concurrent Binance requests (keep low)"
+        required: true
+        default: "2"
+        type: choice
+        options:
+          - "1"
+          - "2"
+          - "4"
+      symbol_limit:
+        description: "Optional symbol limit for a quick test (0 = all discovered symbols)"
+        required: true
+        default: "0"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: historical-pump-analysis
+  cancel-in-progress: false
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Validate inputs
+        shell: bash
+        run: |
+          if ! [[ "${{ inputs.symbol_limit }}" =~ ^[0-9]+$ ]]; then
+            echo "symbol_limit must be a non-negative integer"
+            exit 1
+          fi
+
+      - name: Run historical analysis
+        run: |
+          python historical_pump_analyzer.py \
+            --days "${{ inputs.days }}" \
+            --workers "${{ inputs.workers }}" \
+            --symbols "${{ inputs.symbol_limit }}" \
+            --out-dir historical_analysis
+
+      - name: Upload CSV and summary reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: historical-analysis-${{ github.run_number }}
+          path: historical_analysis/
+          if-no-files-found: warn
+          retention-days: 14
