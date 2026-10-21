@@ -34,7 +34,7 @@ class SignalTrackerTests(unittest.TestCase):
             db = connect_db(Path(tmp) / "tracker.db")
             try:
                 db.execute("""INSERT INTO signals(signal_time_ms,symbol,entry_price,source_key)
-                              VALUES(?,?,?,?,?)""".replace("VALUES(?,?,?,?,?)", "VALUES(?,?,?,?)"),
+                              VALUES(?,?,?,?)""",
                            (1_000_000, "BTCUSDT", 100.0, "key"))
                 db.commit()
                 signal = db.execute("SELECT * FROM signals").fetchone()
