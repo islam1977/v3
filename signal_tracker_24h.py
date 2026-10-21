@@ -157,15 +157,16 @@ def refresh_signal(db: sqlite3.Connection, signal: sqlite3.Row, now_ms: int,
     signal_id = int(signal["id"])
     signal_ms = int(signal["signal_time_ms"])
     # End at the current minute boundary so only completed 1m candles are counted.
-    end_ms = (now_ms // 60_000) * 60_000
+    end_ms = min((now_ms // 60_000) * 60_000, signal_ms + 24 * 60 * 60_000)
     if end_ms <= signal_ms:
         return 0
     latest = db.execute(
         "SELECT MAX(open_time_ms) FROM candles WHERE signal_id=?", (signal_id,)
     ).fetchone()[0]
-    start_ms = max(signal_ms // 60_000 * 60_000, int(latest) + 60_000 if latest is not None else 0)
-    if start_ms < signal_ms // 60_000 * 60_000:
-        start_ms = signal_ms // 60_000 * 60_000
+    # Start at the first candle boundary at or after the signal time to avoid
+    # counting price movement from a candle that began before the signal.
+    first_signal_candle = ((signal_ms + 59_999) // 60_000) * 60_000
+    start_ms = max(first_signal_candle, int(latest) + 60_000 if latest is not None else first_signal_candle)
     if start_ms >= end_ms:
         candles = []
     else:
