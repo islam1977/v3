@@ -5,7 +5,7 @@ from historical_pump_analyzer import forward_pump_labels, is_eligible_symbol
 class HistoricalPumpAnalyzerTests(unittest.TestCase):
     def test_labels_only_from_future_highs(self):
         closes = [100.0, 100.0, 100.0, 100.0, 100.0]
-        highs = [100.0, 110.0, 114.0, 115.0, 100.0]
+        highs = [100.0, 115.0, 100.0, 100.0, 100.0]
         labels = forward_pump_labels(highs, closes, horizon=3, threshold_pct=15)
         self.assertEqual(labels[0], True)
         self.assertEqual(labels[1], False)
