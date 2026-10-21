@@ -2189,7 +2189,7 @@ def maybe_final_signal(x, now):
             "/api/v3/klines", {"symbol": sym, "interval": "1m", "limit": 3}, retries=2
         )
         entry_ok, entry_reason, entry_metrics = confirm_one_minute_entry(
-            one_minute_rows or [], float(final_x.get("price") or x.get("price") or 0)
+            one_minute_rows or [], float(x.get("price") or final_x.get("price") or 0)
         )
     except Exception as exc:
         entry_ok, entry_reason, entry_metrics = False, "1M_CONFIRMATION_FETCH_ERROR", {}
