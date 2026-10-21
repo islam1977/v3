@@ -21,13 +21,13 @@ class OneMinuteEntryConfirmationTests(unittest.TestCase):
         self.assertEqual(reason, "BEARISH_1M_CANDLE")
 
     def test_rejects_price_losing_signal_level(self):
-        rows = [candle(100, 101, 99, 100), candle(99.5, 100, 98, 99), candle(99, 100, 98, 99)]
+        rows = [candle(100, 101, 99, 98.5), candle(98.9, 99.1, 97, 99), candle(99, 100, 98, 99)]
         accepted, reason, _ = confirm_one_minute_entry(rows, 100)
         self.assertFalse(accepted)
         self.assertEqual(reason, "PRICE_LOST_SIGNAL_LEVEL")
 
     def test_rejects_chasing_a_large_one_minute_move(self):
-        rows = [candle(100, 101, 99, 100), candle(100, 102, 99.8, 101.5), candle(101.5, 103, 101, 102)]
+        rows = [candle(100, 101, 99, 100), candle(100, 101.5, 99.8, 101), candle(101, 102.1, 101.4, 102)]
         accepted, reason, _ = confirm_one_minute_entry(rows, 100)
         self.assertFalse(accepted)
         self.assertEqual(reason, "CHASED_1M_MOVE")
