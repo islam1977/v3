@@ -67,11 +67,12 @@ jobs:
             --symbols "${{ inputs.symbol_limit }}" \
             --out-dir historical_analysis
 
-      - name: Upload CSV and summary reports
-        if: always()
+      
+        
+      - name: Upload missed pumps CSV
         uses: actions/upload-artifact@v4
         with:
-          name: historical-analysis-${{ github.run_number }}
-          path: historical_analysis/
-          if-no-files-found: warn
+          name: missed-pumps-csv
+          path: historical_analysis/missed_pumps.csv
+          if-no-files-found: error
           retention-days: 14
