@@ -1,0 +1,23 @@
+name: Historical analyzer tests
+
+on:
+  push:
+    branches: [feature/historical-pump-analyzer]
+  pull_request:
+    branches: [main]
+    paths:
+      - "historical_pump_analyzer.py"
+      - "tests/test_historical_pump_analyzer.py"
+      - ".github/workflows/historical-analyzer-tests.yml"
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install requests
+      - run: python -m py_compile historical_pump_analyzer.py tests/test_historical_pump_analyzer.py
+      - run: python -m unittest discover -s tests -p "test_historical_pump_analyzer.py" -v
