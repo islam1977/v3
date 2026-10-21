@@ -329,6 +329,9 @@ def telegram_send(message):
 def check_btc_market_health():
     try:
         klines = get_json("/api/v3/klines", {"symbol": "BTCUSDT", "interval": "15m", "limit": 8})
+        # Binance includes the currently-forming candle in klines.
+        # Use closed candles only so the BTC guard is consistent with analyze().
+        klines = klines[:-1]
         if not klines or len(klines) < 5:
             return True, 0.0, 0.0
         closes = [float(x[4]) for x in klines]
