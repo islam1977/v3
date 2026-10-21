@@ -27,7 +27,7 @@ class OneMinuteEntryConfirmationTests(unittest.TestCase):
         self.assertEqual(reason, "PRICE_LOST_SIGNAL_LEVEL")
 
     def test_rejects_chasing_a_large_one_minute_move(self):
-        rows = [candle(100, 101, 99, 100), candle(101, 103, 100.8, 102), candle(102, 103, 101, 102)]
+        rows = [candle(100, 101, 99, 100), candle(101, 102.8, 100.8, 102.2), candle(102, 103, 101, 102)]
         accepted, reason, _ = confirm_one_minute_entry(rows, 100)
         self.assertFalse(accepted)
         self.assertEqual(reason, "CHASED_1M_MOVE")
