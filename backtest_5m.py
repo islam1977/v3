@@ -286,6 +286,49 @@ def sim_dyn(H, L, C, E, sl, tp, n, slip, be=None, tt=None, tr=None):
     ex[rest] = (C[rest, n - 1] / E[rest] - 1) * 100
     return ex
 
+def sim_dyn_conservative(H, L, C, E, sl, tp, n, slip, be=None, tt=None, tr=None):
+    """Dynamic exit with conservative OHLC sequencing.
+
+    A stop raised by this candle's high is considered hit if the same candle's
+    low also crosses it. If both that stop and TP are reachable in one candle,
+    count the stop first. This is a sensitivity bound, not a claim about the
+    true intrabar path; OHLC data cannot reveal that path.
+    """
+    N = len(E)
+    stop, tpp, peak = E * (1 - sl / 100), E * (1 + tp / 100), E.copy()
+    done, ex = np.zeros(N, bool), np.zeros(N)
+    for j in range(n):
+        low, high = L[:, j], H[:, j]
+        hit_old = ~done & (low <= stop)
+        ex[hit_old] = (stop[hit_old] / E[hit_old] - 1) * 100 - slip
+        done |= hit_old
+
+        act = ~done
+        new_peak = np.where(act, np.maximum(peak, high), peak)
+        new_stop = stop.copy()
+        if be is not None:
+            be_active = act & (new_peak >= E * (1 + be / 100))
+            new_stop = np.where(be_active, np.maximum(new_stop, E), new_stop)
+        if tr is not None:
+            tr_active = act & (new_peak >= E * (1 + tt / 100))
+            new_stop = np.where(tr_active, np.maximum(new_stop, new_peak * (1 - tr / 100)), new_stop)
+
+        # If this candle raises the stop and its low crosses that raised stop,
+        # conservatively exit at the raised stop before considering the TP.
+        raised_hit = act & (new_stop > stop) & (low <= new_stop)
+        ex[raised_hit] = (new_stop[raised_hit] / E[raised_hit] - 1) * 100 - slip
+        done |= raised_hit
+
+        hit_t = ~done & (high >= tpp)
+        ex[hit_t] = tp
+        done |= hit_t
+        peak = np.where(~done, new_peak, peak)
+        stop = np.where(~done, new_stop, stop)
+
+    rest = ~done
+    ex[rest] = (C[rest, n - 1] / E[rest] - 1) * 100
+    return ex
+
 
 def exit_variants():
     v = []
@@ -298,6 +341,13 @@ def exit_variants():
     for sl, tp, tt, tr in ((3.5, 12, 2.5, 1.5), (5, 12, 3, 2)):
         v.append({"name": f"Trail SL{sl}/TP{tp}/بعد{tt}/تتبع{tr}/240د", "kind": "dyn", "sl": sl, "tp": tp, "n": 48,
                   "tt": tt, "tr": tr})
+    # Conservative OHLC sensitivity checks: raised stops may be hit in the same candle.
+    for sl, tp, be in ((3.5, 8, 2.5), (5, 8, 3)):
+        v.append({"name": f"BE-محافظ SL{sl}/TP{tp}/تعادل@{be}/240د", "kind": "dyn_conservative",
+                  "sl": sl, "tp": tp, "n": 48, "be": be})
+    for sl, tp, tt, tr in ((3.5, 12, 2.5, 1.5), (5, 12, 3, 2)):
+        v.append({"name": f"Trail-محافظ SL{sl}/TP{tp}/بعد{tt}/تتبع{tr}/240د", "kind": "dyn_conservative",
+                  "sl": sl, "tp": tp, "n": 48, "tt": tt, "tr": tr})
     return v
 
 
@@ -307,6 +357,8 @@ CURRENT_EXIT = "SL3.5/TP5.25/240د"
 def run_exit(v, H, L, C, E, fee, slip):
     if v["kind"] == "fixed":
         ex = sim_fixed(H, L, C, E, v["sl"], v["tp"], v["n"], slip)
+    elif v["kind"] == "dyn_conservative":
+        ex = sim_dyn_conservative(H, L, C, E, v["sl"], v["tp"], v["n"], slip, v.get("be"), v.get("tt"), v.get("tr"))
     else:
         ex = sim_dyn(H, L, C, E, v["sl"], v["tp"], v["n"], slip, v.get("be"), v.get("tt"), v.get("tr"))
     return ex - fee
